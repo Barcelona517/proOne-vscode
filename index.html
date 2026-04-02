@@ -101,12 +101,16 @@
         </div>
 
         <div class="section">
-          <div class="section-title">3. 标签树</div>
-          <div class="picker-title">当前图片标签树（点击高亮同标签框）</div>
+          <div class="section-title with-action">
+            <span>3. 标签树</span>
+            <button id="toggleTemplateTreeBtn" class="mini-btn" type="button">模板树</button>
+          </div>
+          <div class="picker-title">当前图片标签树（点击标签高亮对应框线）</div>
           <div id="imageTagTree" class="tag-tree"></div>
 
-          <div class="picker-title">模板树（标签+属性，可增删改排）</div>
-          <div id="templateTagTree" class="tag-tree"></div>
+          <div id="templateTreeArea" class="hidden-block">
+            <div class="picker-title">模板树（标签+属性，可增删改排）</div>
+            <div id="templateTagTree" class="tag-tree"></div>
 
           <label>选择模板标签
             <select id="templateTagSelect"></select>
@@ -136,7 +140,8 @@
           <label>属性(逗号分隔)
             <input id="newTagAttrs" type="text" placeholder="例如：id,type,version" />
           </label>
-          <button id="addTagBtn">新增模板标签</button>
+            <button id="addTagBtn">新增模板标签</button>
+          </div>
         </div>
       </aside>
     </main>

@@ -45,9 +45,9 @@ const templateDefaults = [
   { id: "t_authors", name: "authors", parentId: "t_head", attrs: ["id", "name"] },
   { id: "t_book", name: "book", parentId: "t_head", attrs: ["id", "name"] },
   { id: "t_date", name: "date", parentId: "t_head", attrs: ["id", "value"] },
-  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "type", "version", "note"] },
-  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "type", "version", "src"] },
-  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "type", "version", "note"] },
+  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "type", "column", "direction"] },
+  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "type", "src", "name", "position", "note"] },
+  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "type", "column", "direction"] },
   { id: "t_sources", name: "sources", parentId: "t_view", attrs: ["id", "name"] }
 ];
 
@@ -58,6 +58,7 @@ const state = {
   selectedAnnoId: null,
   selectedTemplateTagId: null,
   selectedTagFilterName: "",
+  showTemplateTree: false,
   drawMode: false,
   drawingActive: false,
   draftRect: null,
@@ -92,6 +93,8 @@ const el = {
   annoNote: document.getElementById("annoNote"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
+  toggleTemplateTreeBtn: document.getElementById("toggleTemplateTreeBtn"),
+  templateTreeArea: document.getElementById("templateTreeArea"),
   templateTagTree: document.getElementById("templateTagTree"),
   templateTagSelect: document.getElementById("templateTagSelect"),
   tagMoveUpBtn: document.getElementById("tagMoveUpBtn"),
@@ -182,9 +185,6 @@ function ensureImageMeta(img, idx) {
   img.annotations = img.annotations || [];
   img.annotations.forEach((anno, index) => {
     anno.attrs = anno.attrs || {};
-    if (!anno.attrs.type) anno.attrs.type = "1";
-    if (!anno.attrs.version) anno.attrs.version = "1.0";
-    if (!anno.attrs.note) anno.attrs.note = anno.note || "";
     anno.color = anno.color || "#2e6f86";
     anno.shape = anno.shape || "rect";
     anno.id = anno.id || `anno_${index + 1}`;
@@ -192,12 +192,18 @@ function ensureImageMeta(img, idx) {
   });
 }
 
+function setIfNotEmpty(obj, key, value) {
+  const trimmed = (value || "").trim();
+  if (trimmed) obj[key] = trimmed;
+}
+
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     images: state.images,
     templateTags: state.templateTags,
     selectedImageId: state.selectedImageId,
-    selectedTemplateTagId: state.selectedTemplateTagId
+    selectedTemplateTagId: state.selectedTemplateTagId,
+    showTemplateTree: state.showTemplateTree
   }));
 }
 
@@ -211,6 +217,7 @@ function loadState() {
         state.templateTags = parsed.templateTags;
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
         state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
+        state.showTemplateTree = Boolean(parsed.showTemplateTree);
         ensureTemplateOrder();
         state.images.forEach((img, idx) => ensureImageMeta(img, idx));
         return;
@@ -232,6 +239,7 @@ function loadState() {
   ensureTemplateOrder();
   state.selectedImageId = state.images[0]?.id || null;
   state.selectedTemplateTagId = state.templateTags[0]?.id || null;
+  state.showTemplateTree = false;
 }
 
 function renderThumbs() {
@@ -286,20 +294,19 @@ function renderMainImage() {
   el.viewerTitle.textContent = `${img.name} | id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}`;
 }
 
-function getDisplayAnnos(img) {
-  if (!state.selectedTagFilterName) return img.annotations;
-  return img.annotations.filter((anno) => anno.tagName === state.selectedTagFilterName);
-}
-
 function renderBoxes() {
   const img = selectedImage();
   el.drawLayer.innerHTML = "";
   if (!img) return;
 
-  getDisplayAnnos(img).forEach((anno) => {
+  img.annotations.forEach((anno) => {
     const box = document.createElement("div");
     box.className = `box shape-${anno.shape}`;
     if (anno.id === state.selectedAnnoId) box.classList.add("selected");
+    if (state.selectedTagFilterName) {
+      if (anno.tagName === state.selectedTagFilterName) box.classList.add("matching-tag");
+      else box.classList.add("dimmed");
+    }
     box.style.left = `${anno.rect.x * 100}%`;
     box.style.top = `${anno.rect.y * 100}%`;
     box.style.width = `${anno.rect.w * 100}%`;
@@ -489,13 +496,18 @@ function renderImageTagTree() {
   names.forEach((name) => {
     const li = document.createElement("li");
     const line = document.createElement("div");
-    line.className = "tree-node-line";
+    line.className = "tree-node-line clickable";
     const label = document.createElement("span");
     label.textContent = `${name} (${img.annotations.filter((anno) => anno.tagName === name).length})`;
+    line.addEventListener("click", () => {
+      state.selectedTagFilterName = state.selectedTagFilterName === name ? "" : name;
+      renderAll();
+    });
     const btn = document.createElement("button");
     btn.className = `tree-pick-btn ${state.selectedTagFilterName === name ? "active" : ""}`;
     btn.textContent = state.selectedTagFilterName === name ? "已高亮" : "高亮";
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (evt) => {
+      evt.stopPropagation();
       state.selectedTagFilterName = state.selectedTagFilterName === name ? "" : name;
       renderAll();
     });
@@ -509,7 +521,29 @@ function renderImageTagTree() {
     li.textContent = "当前图片暂无标签";
     ul.appendChild(li);
   }
+  if (names.length > 0) {
+    const clearLi = document.createElement("li");
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "tree-pick-btn";
+    clearBtn.textContent = "取消高亮";
+    clearBtn.addEventListener("click", () => {
+      state.selectedTagFilterName = "";
+      renderAll();
+    });
+    clearLi.appendChild(clearBtn);
+    ul.appendChild(clearLi);
+  }
   el.imageTagTree.appendChild(ul);
+}
+
+function renderTemplateTreeVisibility() {
+  if (state.showTemplateTree) {
+    el.templateTreeArea.classList.add("active");
+    el.toggleTemplateTreeBtn.textContent = "收起模板树";
+  } else {
+    el.templateTreeArea.classList.remove("active");
+    el.toggleTemplateTreeBtn.textContent = "模板树";
+  }
 }
 
 function renderSelectedTagInfo() {
@@ -574,6 +608,7 @@ function renderAll() {
   renderTagPickerTree();
   renderSelectedTagInfo();
   renderImageTagTree();
+  renderTemplateTreeVisibility();
   renderTemplateTagTree();
   renderTemplateTagSelect();
   renderDraftTagParentOptions();
@@ -645,6 +680,12 @@ function bindEvents() {
     evt.target.value = "";
   });
 
+  el.toggleTemplateTreeBtn.addEventListener("click", () => {
+    state.showTemplateTree = !state.showTemplateTree;
+    renderAll();
+    saveState();
+  });
+
   el.enterEditModeBtn.addEventListener("click", () => {
     state.drawMode = !state.drawMode;
     state.drawingActive = false;
@@ -697,13 +738,7 @@ function bindEvents() {
     if (!tag) { alert("标签不存在"); return; }
 
     const attrs = {};
-    (tag.attrs || []).forEach((attr) => {
-      if (attr === "id") attrs.id = "";
-      else if (attr === "type") attrs.type = "1";
-      else if (attr === "version") attrs.version = "1.0";
-      else attrs[attr] = "";
-    });
-    attrs.note = el.annoNote.value.trim();
+    setIfNotEmpty(attrs, "note", el.annoNote.value);
 
     const anno = {
       id: uid("anno"),
@@ -744,9 +779,13 @@ function bindEvents() {
       return;
     }
 
-    Object.keys(state.propInputs).forEach((key) => { anno.attrs[key] = state.propInputs[key].value.trim(); });
-    anno.attrs.note = el.propNote.value.trim();
-    anno.note = anno.attrs.note;
+    const nextAttrs = {};
+    Object.keys(state.propInputs).forEach((key) => {
+      setIfNotEmpty(nextAttrs, key, state.propInputs[key].value);
+    });
+    setIfNotEmpty(nextAttrs, "note", el.propNote.value);
+    anno.attrs = nextAttrs;
+    anno.note = anno.attrs.note || "";
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();

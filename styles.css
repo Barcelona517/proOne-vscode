@@ -194,6 +194,15 @@ body {
   box-shadow: 0 0 0 2px #111 inset, 0 0 0 2px #111;
 }
 
+.box.dimmed {
+  opacity: 0.2;
+  filter: grayscale(0.55);
+}
+
+.box.matching-tag {
+  box-shadow: 0 0 0 2px #111 inset, 0 0 0 2px #111, 0 0 14px rgba(17, 17, 17, 0.35);
+}
+
 .box.temp.shape-line,
 .box.temp.shape-wave {
   border-top-style: dashed;
@@ -212,6 +221,20 @@ body {
   font-size: 13px;
   font-weight: 700;
   margin-bottom: 8px;
+}
+
+.section-title.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mini-btn {
+  width: auto;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 5px;
 }
 
 #propsEditor {
@@ -356,6 +379,16 @@ button.primary {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.tree-node-line.clickable {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+
+.tree-node-line.clickable:hover {
+  background: #f3e7d8;
 }
 
 .tree-pick-btn {
