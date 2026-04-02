@@ -39,15 +39,7 @@
         <div class="section">
           <div class="section-title">1. 当前对象属性</div>
           <div id="currentTargetHint" class="muted">当前：图片</div>
-          <label>ID
-            <input id="propId" type="text" placeholder="id" />
-          </label>
-          <label>Type
-            <input id="propType" type="text" placeholder="type" />
-          </label>
-          <label>Version
-            <input id="propVersion" type="text" placeholder="version" />
-          </label>
+          <div id="propsEditor"></div>
           <label>注释(可选)
             <textarea id="propNote" rows="2" placeholder="对象注释"></textarea>
           </label>
@@ -56,37 +48,86 @@
 
         <div class="section">
           <div class="section-title">2. 画框模式</div>
-          <div id="drawState" class="muted">先选择标签与样式，再点击进入画框模式</div>
-          <div class="row-actions single-bottom-gap">
-            <button id="toggleDrawModeBtn" class="primary">进入画框模式</button>
-            <button id="clearDraftBtn">清空草稿</button>
+          <div class="row-actions one-col single-bottom-gap">
+            <button id="enterEditModeBtn" class="primary">进入编辑模式</button>
           </div>
-          <label>样式形状
-            <select id="annoShapeSelect">
-              <option value="rect">方框</option>
-              <option value="line">横线</option>
-              <option value="wave">波浪线</option>
-            </select>
-          </label>
-          <label>样式颜色
-            <input id="annoColor" type="color" value="#2e6f86" />
-          </label>
-          <div class="picker-title">树状选择标签</div>
-          <div id="tagPickerTree" class="tag-tree picker"></div>
-          <div id="selectedTagInfo" class="muted">未选择标签</div>
-          <label>简体转写
-            <input id="annoTranscription" type="text" placeholder="输入简体字/文本" />
-          </label>
-          <label>注释(可选)
-            <textarea id="annoNote" rows="3" placeholder="输入注释"></textarea>
-          </label>
-          <button id="saveAnnoBtn" class="primary">保存标注</button>
+          <div id="editModeArea" class="hidden-block">
+            <div id="drawState" class="muted">编辑模式已开启</div>
+            <div class="row-actions single-bottom-gap">
+              <button id="startDrawBtn" class="primary">添加框</button>
+              <button id="clearDraftBtn">清空草稿</button>
+            </div>
+            <label>样式形状
+              <select id="annoShapeSelect">
+                <option value="rect">方框</option>
+                <option value="line">横线</option>
+                <option value="wave">波浪线</option>
+              </select>
+            </label>
+            <label>样式颜色
+              <input id="annoColor" type="color" value="#2e6f86" />
+            </label>
+
+            <div class="picker-title">选择标签（模板树）</div>
+            <div id="tagPickerTree" class="tag-tree picker"></div>
+            <div id="selectedTagInfo" class="muted">未选择标签</div>
+
+            <details class="add-tag-box">
+              <summary>或新增标签后使用</summary>
+              <label>新标签名称
+                <input id="draftTagName" type="text" placeholder="例如：chapter / line / note" />
+              </label>
+              <label>父标签
+                <select id="draftTagParent"></select>
+              </label>
+              <label>标签属性(逗号分隔)
+                <input id="draftTagAttrs" type="text" placeholder="例如：id,type,version" />
+              </label>
+              <label class="check-line">
+                <input id="addDraftTagToTemplate" type="checkbox" checked />
+                <span>加入模板树</span>
+              </label>
+              <button id="createDraftTagBtn">创建并选择该标签</button>
+            </details>
+
+            <label>简体转写
+              <input id="annoTranscription" type="text" placeholder="输入简体字/文本" />
+            </label>
+            <label>注释(可选)
+              <textarea id="annoNote" rows="3" placeholder="输入注释"></textarea>
+            </label>
+            <button id="saveAnnoBtn" class="primary">保存标注</button>
+          </div>
         </div>
 
         <div class="section">
-          <div class="section-title">3. 标签树（标签+属性）</div>
-          <div id="tagTree" class="tag-tree"></div>
-          <label>标签名称
+          <div class="section-title">3. 标签树</div>
+          <div class="picker-title">当前图片标签树（点击高亮同标签框）</div>
+          <div id="imageTagTree" class="tag-tree"></div>
+
+          <div class="picker-title">模板树（标签+属性，可增删改排）</div>
+          <div id="templateTagTree" class="tag-tree"></div>
+
+          <label>选择模板标签
+            <select id="templateTagSelect"></select>
+          </label>
+          <div class="row-actions">
+            <button id="tagMoveUpBtn">同级上移</button>
+            <button id="tagMoveDownBtn">同级下移</button>
+          </div>
+          <button id="deleteTagBtn">删除模板标签</button>
+
+          <label>为模板标签新增属性
+            <input id="newAttrForTemplateTag" type="text" placeholder="属性名，例如：id" />
+          </label>
+          <button id="addAttrBtn">新增属性</button>
+          <label>删除模板标签属性
+            <select id="templateAttrSelect"></select>
+          </label>
+          <button id="deleteAttrBtn">删除属性</button>
+
+          <hr />
+          <label>新增模板标签名称
             <input id="newTagName" type="text" placeholder="例如：line / note / customTag" />
           </label>
           <label>插入到父标签
@@ -95,7 +136,7 @@
           <label>属性(逗号分隔)
             <input id="newTagAttrs" type="text" placeholder="例如：id,type,version" />
           </label>
-          <button id="addTagBtn">新增标签</button>
+          <button id="addTagBtn">新增模板标签</button>
         </div>
       </aside>
     </main>

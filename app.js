@@ -1,4 +1,4 @@
-const STORAGE_KEY = "guji_editor_v3";
+﻿const STORAGE_KEY = "guji_editor_v4";
 
 const seedImages = [
   { path: "古籍示例/顶格/试验样例-00000002-00008.jpg", category: "顶格", element: "text", kind: "文字" },
@@ -35,37 +35,34 @@ const seedImages = [
   { path: "古籍示例/标准样式/3 (10).png", category: "标准样式", element: "text", kind: "文字" }
 ];
 
-const builtInTags = [
+const templateDefaults = [
   { id: "t_article", name: "article", parentId: null, attrs: ["id", "type", "version"] },
-  { id: "t_head", name: "head", parentId: "t_article", attrs: ["title", "authors"] },
+  { id: "t_head", name: "head", parentId: "t_article", attrs: ["id"] },
   { id: "t_content", name: "content", parentId: "t_article", attrs: ["id"] },
-  { id: "t_view", name: "view", parentId: "t_article", attrs: ["mode"] },
-  { id: "t_title", name: "title", parentId: "t_head", attrs: ["name", "note", "type"] },
-  { id: "t_subtitle", name: "subtitle", parentId: "t_head", attrs: ["name"] },
-  { id: "t_authors", name: "authors", parentId: "t_head", attrs: ["name"] },
-  { id: "t_book", name: "book", parentId: "t_head", attrs: ["name"] },
-  { id: "t_date", name: "date", parentId: "t_head", attrs: ["value"] },
-  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "type", "note"] },
-  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "src"] },
-  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "type"] },
-  { id: "t_sources", name: "sources", parentId: "t_view", attrs: ["name"] }
+  { id: "t_view", name: "view", parentId: "t_article", attrs: ["id"] },
+  { id: "t_title", name: "title", parentId: "t_head", attrs: ["id", "type", "name", "note"] },
+  { id: "t_subtitle", name: "subtitle", parentId: "t_head", attrs: ["id", "name", "note"] },
+  { id: "t_authors", name: "authors", parentId: "t_head", attrs: ["id", "name"] },
+  { id: "t_book", name: "book", parentId: "t_head", attrs: ["id", "name"] },
+  { id: "t_date", name: "date", parentId: "t_head", attrs: ["id", "value"] },
+  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "type", "version", "note"] },
+  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "type", "version", "src"] },
+  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "type", "version", "note"] },
+  { id: "t_sources", name: "sources", parentId: "t_view", attrs: ["id", "name"] }
 ];
-
-const shapeNameMap = {
-  rect: "方框",
-  line: "横线",
-  wave: "波浪线"
-};
 
 const state = {
   images: [],
-  tagDefs: [],
+  templateTags: [],
   selectedImageId: null,
-  selectedTagId: null,
   selectedAnnoId: null,
+  selectedTemplateTagId: null,
+  selectedTagFilterName: "",
   drawMode: false,
+  drawingActive: false,
   draftRect: null,
-  editingAnnoId: null
+  activeDraftTagId: null,
+  propInputs: {}
 };
 
 const el = {
@@ -73,50 +70,49 @@ const el = {
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
   viewerTitle: document.getElementById("viewerTitle"),
-
   currentTargetHint: document.getElementById("currentTargetHint"),
-  propId: document.getElementById("propId"),
-  propType: document.getElementById("propType"),
-  propVersion: document.getElementById("propVersion"),
+  propsEditor: document.getElementById("propsEditor"),
   propNote: document.getElementById("propNote"),
   saveCurrentPropsBtn: document.getElementById("saveCurrentPropsBtn"),
-
+  enterEditModeBtn: document.getElementById("enterEditModeBtn"),
+  editModeArea: document.getElementById("editModeArea"),
   drawState: document.getElementById("drawState"),
-  toggleDrawModeBtn: document.getElementById("toggleDrawModeBtn"),
+  startDrawBtn: document.getElementById("startDrawBtn"),
   clearDraftBtn: document.getElementById("clearDraftBtn"),
   annoShapeSelect: document.getElementById("annoShapeSelect"),
   annoColor: document.getElementById("annoColor"),
   tagPickerTree: document.getElementById("tagPickerTree"),
   selectedTagInfo: document.getElementById("selectedTagInfo"),
+  draftTagName: document.getElementById("draftTagName"),
+  draftTagParent: document.getElementById("draftTagParent"),
+  draftTagAttrs: document.getElementById("draftTagAttrs"),
+  addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
+  createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
   annoNote: document.getElementById("annoNote"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
-
-  tagTree: document.getElementById("tagTree"),
+  imageTagTree: document.getElementById("imageTagTree"),
+  templateTagTree: document.getElementById("templateTagTree"),
+  templateTagSelect: document.getElementById("templateTagSelect"),
+  tagMoveUpBtn: document.getElementById("tagMoveUpBtn"),
+  tagMoveDownBtn: document.getElementById("tagMoveDownBtn"),
+  deleteTagBtn: document.getElementById("deleteTagBtn"),
+  newAttrForTemplateTag: document.getElementById("newAttrForTemplateTag"),
+  addAttrBtn: document.getElementById("addAttrBtn"),
+  templateAttrSelect: document.getElementById("templateAttrSelect"),
+  deleteAttrBtn: document.getElementById("deleteAttrBtn"),
   newTagName: document.getElementById("newTagName"),
   newTagParent: document.getElementById("newTagParent"),
   newTagAttrs: document.getElementById("newTagAttrs"),
   addTagBtn: document.getElementById("addTagBtn"),
-
   uploadInput: document.getElementById("uploadInput"),
   uploadBtn: document.getElementById("uploadBtn")
 };
 
-function uid(prefix) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function encodePath(path) {
-  return path.split("/").map((part) => encodeURIComponent(part)).join("/");
-}
-
-function fileToDisplayName(path) {
-  return path.split("/").pop() || path;
-}
-
-function clamp01(v) {
-  return Math.max(0, Math.min(1, v));
-}
+function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
+function encodePath(path) { return path.split("/").map((part) => encodeURIComponent(part)).join("/"); }
+function fileToDisplayName(path) { return path.split("/").pop() || path; }
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 function normalizeRect(rect) {
   const x1 = Math.min(rect.x1, rect.x2);
@@ -135,64 +131,74 @@ function toShapeRect(base, shape) {
 }
 
 function hexToRgba(hex, alpha) {
-  const h = hex.replace("#", "");
-  const normalized = h.length === 3
-    ? h.split("").map((ch) => ch + ch).join("")
-    : h;
-  const int = Number.parseInt(normalized, 16);
-  const r = (int >> 16) & 255;
-  const g = (int >> 8) & 255;
-  const b = int & 255;
+  const clean = hex.replace("#", "");
+  const normalized = clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean;
+  const intVal = Number.parseInt(normalized, 16);
+  const r = (intVal >> 16) & 255;
+  const g = (intVal >> 8) & 255;
+  const b = intVal & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function findTag(id) {
-  return state.tagDefs.find((tag) => tag.id === id) || null;
-}
+function findTemplateTag(id) { return state.templateTags.find((tag) => tag.id === id) || null; }
+function templateChildren(parentId) { return state.templateTags.filter((tag) => tag.parentId === parentId).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
-function childrenOf(parentId) {
-  return state.tagDefs.filter((tag) => tag.parentId === parentId);
-}
-
-function tagPath(tagId) {
+function templatePath(tagId) {
   const arr = [];
-  let cursor = findTag(tagId);
+  let cursor = findTemplateTag(tagId);
   while (cursor) {
     arr.unshift(cursor.name);
-    cursor = cursor.parentId ? findTag(cursor.parentId) : null;
+    cursor = cursor.parentId ? findTemplateTag(cursor.parentId) : null;
   }
   return arr.join("/");
 }
 
-function selectedImage() {
-  return state.images.find((img) => img.id === state.selectedImageId) || null;
-}
-
+function selectedImage() { return state.images.find((img) => img.id === state.selectedImageId) || null; }
 function selectedAnno() {
   const img = selectedImage();
-  if (!img || !state.selectedAnnoId) {
-    return null;
-  }
+  if (!img || !state.selectedAnnoId) return null;
   return img.annotations.find((anno) => anno.id === state.selectedAnnoId) || null;
 }
 
-function ensureImageAttrs(image) {
-  image.attrs = image.attrs || {};
-  image.attrs.id = image.attrs.id || uid("img");
-  image.attrs.type = image.attrs.type || "1";
-  image.attrs.version = image.attrs.version || "1.0";
-  image.attrs.note = image.attrs.note || "";
+function ensureTemplateOrder() {
+  const parentGroups = new Map();
+  state.templateTags.forEach((tag) => {
+    const key = tag.parentId || "ROOT";
+    if (!parentGroups.has(key)) parentGroups.set(key, []);
+    parentGroups.get(key).push(tag);
+  });
+  parentGroups.forEach((group) => {
+    group.sort((a, b) => (a.order || 0) - (b.order || 0));
+    group.forEach((tag, index) => { tag.order = index + 1; });
+  });
 }
 
-function ensureAnnoAttrs(anno) {
-  anno.attrs = anno.attrs || {};
-  anno.attrs.id = anno.attrs.id || uid("box");
-  anno.attrs.type = anno.attrs.type || "1";
-  anno.attrs.version = anno.attrs.version || "1.0";
-  anno.attrs.note = anno.attrs.note || anno.note || "";
-  anno.color = anno.color || "#2e6f86";
-  anno.shape = anno.shape || "rect";
-  anno.parentAnnoId = anno.parentAnnoId || null;
+function ensureImageMeta(img, idx) {
+  img.meta = img.meta || {};
+  if (!img.meta.id) img.meta.id = `img_${idx + 1}`;
+  if (!img.meta.type) img.meta.type = "1";
+  if (!img.meta.version) img.meta.version = "1.0";
+  if (!img.meta.note) img.meta.note = "";
+  img.annotations = img.annotations || [];
+  img.annotations.forEach((anno, index) => {
+    anno.attrs = anno.attrs || {};
+    if (!anno.attrs.type) anno.attrs.type = "1";
+    if (!anno.attrs.version) anno.attrs.version = "1.0";
+    if (!anno.attrs.note) anno.attrs.note = anno.note || "";
+    anno.color = anno.color || "#2e6f86";
+    anno.shape = anno.shape || "rect";
+    anno.id = anno.id || `anno_${index + 1}`;
+    anno.parentAnnoId = anno.parentAnnoId || null;
+  });
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    images: state.images,
+    templateTags: state.templateTags,
+    selectedImageId: state.selectedImageId,
+    selectedTemplateTagId: state.selectedTemplateTagId
+  }));
 }
 
 function loadState() {
@@ -200,142 +206,105 @@ function loadState() {
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.images) && Array.isArray(parsed.tagDefs) && parsed.images.length > 0) {
+      if (Array.isArray(parsed.images) && parsed.images.length > 0 && Array.isArray(parsed.templateTags)) {
         state.images = parsed.images;
-        state.tagDefs = parsed.tagDefs;
+        state.templateTags = parsed.templateTags;
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
-        state.selectedTagId = parsed.selectedTagId || parsed.tagDefs[0]?.id || null;
-
-        state.images.forEach((img) => {
-          ensureImageAttrs(img);
-          img.annotations = img.annotations || [];
-          img.annotations.forEach((anno) => ensureAnnoAttrs(anno));
-        });
+        state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
+        ensureTemplateOrder();
+        state.images.forEach((img, idx) => ensureImageMeta(img, idx));
         return;
       }
-    } catch (_) {
-      // ignore corrupted storage
-    }
+    } catch (_) {}
   }
 
-  state.images = seedImages.map((item, idx) => {
-    const image = {
-      id: `seed_${idx + 1}`,
-      name: fileToDisplayName(item.path),
-      src: encodePath(item.path),
-      category: item.category,
-      contentElement: item.element,
-      contentKind: item.kind,
-      source: "seed",
-      annotations: [],
-      attrs: {
-        id: `img_${idx + 1}`,
-        type: "1",
-        version: "1.0",
-        note: ""
-      }
-    };
-    return image;
-  });
-
-  state.tagDefs = builtInTags.map((tag) => ({ ...tag }));
+  state.images = seedImages.map((item, idx) => ({
+    id: `seed_${idx + 1}`,
+    name: fileToDisplayName(item.path),
+    src: encodePath(item.path),
+    category: item.category,
+    contentElement: item.element,
+    contentKind: item.kind,
+    meta: { id: `img_${idx + 1}`, type: "1", version: "1.0", note: "" },
+    annotations: []
+  }));
+  state.templateTags = templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }));
+  ensureTemplateOrder();
   state.selectedImageId = state.images[0]?.id || null;
-  state.selectedTagId = state.tagDefs[0]?.id || null;
-}
-
-function saveState() {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      images: state.images,
-      tagDefs: state.tagDefs,
-      selectedImageId: state.selectedImageId,
-      selectedTagId: state.selectedTagId
-    })
-  );
+  state.selectedTemplateTagId = state.templateTags[0]?.id || null;
 }
 
 function renderThumbs() {
   el.thumbList.innerHTML = "";
   state.images.forEach((img) => {
-    const item = document.createElement("div");
-    item.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""}`;
-    item.innerHTML = `
-      <div class="thumb-head">
-        <button class="thumb-delete-btn" data-del-img="${img.id}">删除</button>
-      </div>
+    const card = document.createElement("div");
+    card.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""}`;
+    card.innerHTML = `
+      <div class="thumb-head"><button class="thumb-delete-btn" data-id="${img.id}">删除</button></div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
-      <div class="thumb-meta">id:${img.attrs.id} type:${img.attrs.type} version:${img.attrs.version}</div>
+      <div class="thumb-meta">id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}</div>
     `;
 
-    item.addEventListener("click", () => {
+    card.addEventListener("click", () => {
       state.selectedImageId = img.id;
       state.selectedAnnoId = null;
-      state.editingAnnoId = null;
+      state.selectedTagFilterName = "";
+      state.drawMode = false;
+      state.drawingActive = false;
       state.draftRect = null;
-      saveState();
       renderAll();
     });
 
-    const delBtn = item.querySelector("button[data-del-img]");
-    delBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
+    card.querySelector("button[data-id]").addEventListener("click", (evt) => {
+      evt.stopPropagation();
       if (state.images.length <= 1) {
         alert("至少保留一张图片");
         return;
       }
-      if (!window.confirm(`确定删除图片：${img.name} ?`)) {
-        return;
-      }
+      if (!window.confirm(`确定删除图片：${img.name}?`)) return;
       state.images = state.images.filter((it) => it.id !== img.id);
-      if (state.selectedImageId === img.id) {
-        state.selectedImageId = state.images[0]?.id || null;
-      }
+      if (state.selectedImageId === img.id) state.selectedImageId = state.images[0]?.id || null;
       state.selectedAnnoId = null;
-      state.editingAnnoId = null;
-      state.draftRect = null;
-      saveState();
+      state.selectedTagFilterName = "";
       renderAll();
+      saveState();
     });
 
-    el.thumbList.appendChild(item);
+    el.thumbList.appendChild(card);
   });
 }
 
-function renderMain() {
+function renderMainImage() {
   const img = selectedImage();
   if (!img) {
     el.mainImage.removeAttribute("src");
     el.viewerTitle.textContent = "未选择图片";
-    el.drawLayer.innerHTML = "";
     return;
   }
-
   el.mainImage.src = img.src;
-  el.viewerTitle.textContent = `${img.name} | id:${img.attrs.id} type:${img.attrs.type} version:${img.attrs.version}`;
-  renderBoxes();
+  el.viewerTitle.textContent = `${img.name} | id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}`;
+}
+
+function getDisplayAnnos(img) {
+  if (!state.selectedTagFilterName) return img.annotations;
+  return img.annotations.filter((anno) => anno.tagName === state.selectedTagFilterName);
 }
 
 function renderBoxes() {
   const img = selectedImage();
   el.drawLayer.innerHTML = "";
-  if (!img) {
-    return;
-  }
+  if (!img) return;
 
-  img.annotations.forEach((anno) => {
+  getDisplayAnnos(img).forEach((anno) => {
     const box = document.createElement("div");
     box.className = `box shape-${anno.shape}`;
-    if (anno.id === state.selectedAnnoId) {
-      box.classList.add("selected");
-    }
+    if (anno.id === state.selectedAnnoId) box.classList.add("selected");
     box.style.left = `${anno.rect.x * 100}%`;
     box.style.top = `${anno.rect.y * 100}%`;
     box.style.width = `${anno.rect.w * 100}%`;
     box.style.height = `${anno.rect.h * 100}%`;
     box.style.setProperty("--shape-color", anno.color);
-
     if (anno.shape === "rect") {
       box.style.borderColor = anno.color;
       box.style.background = hexToRgba(anno.color, 0.18);
@@ -345,21 +314,12 @@ function renderBoxes() {
     } else {
       box.style.background = `repeating-linear-gradient(-45deg, ${anno.color} 0 4px, transparent 4px 8px)`;
     }
-
-    box.title = `${anno.tagPath}${anno.parentAnnoId ? " (从属子框)" : ""}`;
-    box.dataset.annoId = anno.id;
-    box.addEventListener("click", (e) => {
-      e.stopPropagation();
+    box.title = `${anno.tagPath}${anno.parentAnnoId ? " (子框)" : ""}`;
+    box.addEventListener("click", (evt) => {
+      evt.stopPropagation();
       state.selectedAnnoId = anno.id;
-      state.editingAnnoId = anno.id;
-      state.selectedTagId = anno.tagId;
-      el.annoShapeSelect.value = anno.shape;
-      el.annoColor.value = anno.color;
-      el.annoTranscription.value = anno.transcription || "";
-      el.annoNote.value = anno.note || "";
       renderAll();
     });
-
     el.drawLayer.appendChild(box);
   });
 
@@ -371,7 +331,6 @@ function renderBoxes() {
     draft.style.width = `${state.draftRect.w * 100}%`;
     draft.style.height = `${state.draftRect.h * 100}%`;
     draft.style.setProperty("--shape-color", el.annoColor.value);
-
     if (el.annoShapeSelect.value === "rect") {
       draft.style.borderColor = el.annoColor.value;
       draft.style.background = hexToRgba(el.annoColor.value, 0.18);
@@ -381,134 +340,201 @@ function renderBoxes() {
     } else {
       draft.style.background = `repeating-linear-gradient(-45deg, ${el.annoColor.value} 0 4px, transparent 4px 8px)`;
     }
-
     el.drawLayer.appendChild(draft);
   }
 }
 
-function renderCurrentPropsPanel() {
-  const anno = selectedAnno();
+function renderPropsEditor() {
   const img = selectedImage();
-  if (!img) {
+  const anno = selectedAnno();
+  el.propsEditor.innerHTML = "";
+  state.propInputs = {};
+  if (!img) return;
+
+  if (!anno) {
+    el.currentTargetHint.textContent = "当前：图片";
+    ["id", "type", "version"].forEach((key) => {
+      const row = document.createElement("div");
+      row.className = "prop-row";
+      row.innerHTML = `<span>${key}</span>`;
+      const input = document.createElement("input");
+      input.value = img.meta[key] || "";
+      state.propInputs[key] = input;
+      row.appendChild(input);
+      el.propsEditor.appendChild(row);
+    });
+    el.propNote.value = img.meta.note || "";
     return;
   }
 
-  if (anno) {
-    el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})${anno.parentAnnoId ? " / 子框" : ""}`;
-    el.propId.value = anno.attrs.id || "";
-    el.propType.value = anno.attrs.type || "";
-    el.propVersion.value = anno.attrs.version || "";
-    el.propNote.value = anno.attrs.note || anno.note || "";
+  el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
+  const templateTag = findTemplateTag(anno.tagId);
+  const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id", "type", "version"];
+  attrs.forEach((key) => {
+    const row = document.createElement("div");
+    row.className = "prop-row";
+    row.innerHTML = `<span>${key}</span>`;
+    const input = document.createElement("input");
+    input.value = anno.attrs[key] || "";
+    state.propInputs[key] = input;
+    row.appendChild(input);
+    el.propsEditor.appendChild(row);
+  });
+  el.propNote.value = anno.attrs.note || anno.note || "";
+}
+
+function renderEditMode() {
+  if (state.drawMode) {
+    el.enterEditModeBtn.textContent = "退出编辑模式";
+    el.editModeArea.classList.add("active");
   } else {
-    el.currentTargetHint.textContent = "当前：图片";
-    el.propId.value = img.attrs.id || "";
-    el.propType.value = img.attrs.type || "";
-    el.propVersion.value = img.attrs.version || "";
-    el.propNote.value = img.attrs.note || "";
+    el.enterEditModeBtn.textContent = "进入编辑模式";
+    el.editModeArea.classList.remove("active");
+  }
+
+  if (!state.drawMode) {
+    el.drawState.textContent = "当前未处于编辑模式";
+    return;
+  }
+  if (state.drawingActive) {
+    el.drawState.textContent = state.draftRect ? "草稿已生成，可保存" : "请在图片上拖拽画框";
+    el.startDrawBtn.textContent = "取消添加";
+  } else {
+    el.drawState.textContent = "点击添加框开始本次画框";
+    el.startDrawBtn.textContent = "添加框";
   }
 }
 
-function renderTagTree() {
-  function renderNode(tag) {
+function renderTemplateTagSelect() {
+  el.templateTagSelect.innerHTML = "";
+  const options = [];
+  function walk(tag, depth) {
+    options.push({ id: tag.id, label: `${"  ".repeat(depth)}${tag.name}` });
+    templateChildren(tag.id).forEach((child) => walk(child, depth + 1));
+  }
+  templateChildren(null).forEach((root) => walk(root, 0));
+
+  options.forEach((opt) => {
+    const option = document.createElement("option");
+    option.value = opt.id;
+    option.textContent = opt.label;
+    el.templateTagSelect.appendChild(option);
+  });
+
+  if (!state.selectedTemplateTagId && options[0]) state.selectedTemplateTagId = options[0].id;
+  if (state.selectedTemplateTagId) el.templateTagSelect.value = state.selectedTemplateTagId;
+  renderTemplateAttrSelect();
+}
+
+function renderTemplateAttrSelect() {
+  el.templateAttrSelect.innerHTML = "";
+  const tag = findTemplateTag(state.selectedTemplateTagId);
+  if (!tag) return;
+  (tag.attrs || []).forEach((attr) => {
+    const option = document.createElement("option");
+    option.value = attr;
+    option.textContent = attr;
+    el.templateAttrSelect.appendChild(option);
+  });
+}
+
+function renderTagTree(container, clickable) {
+  function node(tag) {
     const li = document.createElement("li");
     const attrs = (tag.attrs || []).join("|");
-    li.innerHTML = `<strong>${tag.name}</strong><span class="tag-meta">${attrs ? ` 属性:${attrs}` : ""}</span>`;
-
-    const children = childrenOf(tag.id);
+    if (!clickable) {
+      li.innerHTML = `<strong>${tag.name}</strong><span class="tag-meta">${attrs ? ` 属性:${attrs}` : ""}</span>`;
+    } else {
+      const line = document.createElement("div");
+      line.className = "tree-node-line";
+      const name = document.createElement("span");
+      name.textContent = tag.name;
+      const btn = document.createElement("button");
+      btn.className = `tree-pick-btn ${state.activeDraftTagId === tag.id ? "active" : ""}`;
+      btn.textContent = state.activeDraftTagId === tag.id ? "已选" : "选择";
+      btn.addEventListener("click", () => {
+        state.activeDraftTagId = tag.id;
+        renderTagPickerTree();
+        renderSelectedTagInfo();
+      });
+      line.appendChild(name);
+      line.appendChild(btn);
+      li.appendChild(line);
+    }
+    const children = templateChildren(tag.id);
     if (children.length > 0) {
       const ul = document.createElement("ul");
-      children.forEach((child) => ul.appendChild(renderNode(child)));
+      children.forEach((child) => ul.appendChild(node(child)));
       li.appendChild(ul);
     }
     return li;
   }
 
-  el.tagTree.innerHTML = "";
+  container.innerHTML = "";
   const rootUl = document.createElement("ul");
-  childrenOf(null).forEach((root) => rootUl.appendChild(renderNode(root)));
-  el.tagTree.appendChild(rootUl);
+  templateChildren(null).forEach((root) => rootUl.appendChild(node(root)));
+  container.appendChild(rootUl);
 }
 
-function buildTagOptionList() {
-  const list = [];
-  function walk(tag, depth) {
-    list.push({ id: tag.id, label: `${"  ".repeat(depth)}${tag.name}` });
-    childrenOf(tag.id).forEach((child) => walk(child, depth + 1));
-  }
-  childrenOf(null).forEach((root) => walk(root, 0));
-  return list;
-}
+function renderTagPickerTree() { renderTagTree(el.tagPickerTree, true); }
+function renderTemplateTagTree() { renderTagTree(el.templateTagTree, false); }
 
-function renderNewTagParentOptions() {
-  const opts = buildTagOptionList();
-  el.newTagParent.innerHTML = "";
-  opts.forEach((opt) => {
-    const o = document.createElement("option");
-    o.value = opt.id;
-    o.textContent = opt.label;
-    el.newTagParent.appendChild(o);
-  });
-}
+function renderImageTagTree() {
+  const img = selectedImage();
+  el.imageTagTree.innerHTML = "";
+  if (!img) return;
 
-function renderTagPickerTree() {
-  function renderPickerNode(tag) {
+  const names = [...new Set(img.annotations.map((anno) => anno.tagName))].sort();
+  const ul = document.createElement("ul");
+  names.forEach((name) => {
     const li = document.createElement("li");
     const line = document.createElement("div");
     line.className = "tree-node-line";
-
-    const name = document.createElement("span");
-    name.textContent = tag.name;
-
+    const label = document.createElement("span");
+    label.textContent = `${name} (${img.annotations.filter((anno) => anno.tagName === name).length})`;
     const btn = document.createElement("button");
-    btn.className = `tree-pick-btn ${state.selectedTagId === tag.id ? "active" : ""}`;
-    btn.textContent = state.selectedTagId === tag.id ? "已选" : "选择";
+    btn.className = `tree-pick-btn ${state.selectedTagFilterName === name ? "active" : ""}`;
+    btn.textContent = state.selectedTagFilterName === name ? "已高亮" : "高亮";
     btn.addEventListener("click", () => {
-      state.selectedTagId = tag.id;
-      renderTagPickerTree();
-      renderSelectedTagInfo();
-      saveState();
+      state.selectedTagFilterName = state.selectedTagFilterName === name ? "" : name;
+      renderAll();
     });
-
-    line.appendChild(name);
+    line.appendChild(label);
     line.appendChild(btn);
-
-    const children = childrenOf(tag.id);
-    if (children.length > 0) {
-      const details = document.createElement("details");
-      details.open = true;
-      const summary = document.createElement("summary");
-      summary.textContent = tag.name;
-      details.appendChild(summary);
-      details.appendChild(line);
-
-      const ul = document.createElement("ul");
-      children.forEach((child) => ul.appendChild(renderPickerNode(child)));
-      details.appendChild(ul);
-      li.appendChild(details);
-    } else {
-      li.appendChild(line);
-    }
-
-    return li;
+    li.appendChild(line);
+    ul.appendChild(li);
+  });
+  if (names.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "当前图片暂无标签";
+    ul.appendChild(li);
   }
-
-  el.tagPickerTree.innerHTML = "";
-  const ul = document.createElement("ul");
-  childrenOf(null).forEach((root) => ul.appendChild(renderPickerNode(root)));
-  el.tagPickerTree.appendChild(ul);
+  el.imageTagTree.appendChild(ul);
 }
 
 function renderSelectedTagInfo() {
-  if (!state.selectedTagId) {
+  if (!state.activeDraftTagId) {
     el.selectedTagInfo.textContent = "未选择标签";
     return;
   }
-  const tag = findTag(state.selectedTagId);
-  if (!tag) {
-    el.selectedTagInfo.textContent = "未选择标签";
-    return;
+  el.selectedTagInfo.textContent = `已选择标签：${templatePath(state.activeDraftTagId)}`;
+}
+
+function renderDraftTagParentOptions() {
+  el.draftTagParent.innerHTML = "";
+  el.newTagParent.innerHTML = "";
+  function append(select, tag, depth) {
+    const option = document.createElement("option");
+    option.value = tag.id;
+    option.textContent = `${"  ".repeat(depth)}${tag.name}`;
+    select.appendChild(option);
   }
-  el.selectedTagInfo.textContent = `已选择标签：${tagPath(tag.id)}`;
+  function walk(tag, depth) {
+    append(el.draftTagParent, tag, depth);
+    append(el.newTagParent, tag, depth);
+    templateChildren(tag.id).forEach((child) => walk(child, depth + 1));
+  }
+  templateChildren(null).forEach((root) => walk(root, 0));
 }
 
 function containsRect(outer, inner) {
@@ -521,63 +547,60 @@ function containsRect(outer, inner) {
   );
 }
 
-function findParentAnnoId(image, rect, currentAnnoId) {
-  const candidates = image.annotations.filter((anno) => anno.id !== currentAnnoId && containsRect(anno.rect, rect));
-  if (candidates.length === 0) {
+function findParentByIdOrContainment(img, newRect, currentId, currentAttrId) {
+  const others = img.annotations.filter((anno) => anno.id !== currentId);
+  if (currentAttrId) {
+    const sameId = others.filter((anno) => (anno.attrs.id || "") === currentAttrId);
+    if (sameId.length > 0) return sameId[0].id;
     return null;
   }
-
-  candidates.sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
-  return candidates[0].id;
-}
-
-function renderDrawState() {
-  if (state.drawMode) {
-    el.toggleDrawModeBtn.textContent = "退出画框模式";
-    el.drawState.textContent = state.draftRect ? "草稿已生成，可保存" : "画框模式已开启：在图片上拖拽";
-  } else {
-    el.toggleDrawModeBtn.textContent = "进入画框模式";
-    el.drawState.textContent = "先选择标签与样式，再点击进入画框模式";
-  }
+  const containing = others.filter((anno) => containsRect(anno.rect, newRect));
+  if (containing.length === 0) return null;
+  containing.sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
+  return containing[0].id;
 }
 
 function renderAll() {
+  const img = selectedImage();
+  if (img) {
+    const idx = state.images.findIndex((it) => it.id === img.id);
+    ensureImageMeta(img, idx);
+  }
   renderThumbs();
-  renderMain();
-  renderCurrentPropsPanel();
-  renderTagTree();
+  renderMainImage();
+  renderBoxes();
+  renderPropsEditor();
+  renderEditMode();
   renderTagPickerTree();
   renderSelectedTagInfo();
-  renderNewTagParentOptions();
-  renderDrawState();
+  renderImageTagTree();
+  renderTemplateTagTree();
+  renderTemplateTagSelect();
+  renderDraftTagParentOptions();
 }
 
-function initDraw() {
+function bindDrawEvents() {
   let drawing = false;
   let start = null;
 
-  el.drawLayer.addEventListener("mousedown", (e) => {
-    if (!state.drawMode || !selectedImage()) {
-      return;
-    }
+  el.drawLayer.addEventListener("mousedown", (evt) => {
+    if (!state.drawMode || !state.drawingActive || !selectedImage()) return;
     const rect = el.drawLayer.getBoundingClientRect();
-    const x = clamp01((e.clientX - rect.left) / rect.width);
-    const y = clamp01((e.clientY - rect.top) / rect.height);
+    const x = clamp01((evt.clientX - rect.left) / rect.width);
+    const y = clamp01((evt.clientY - rect.top) / rect.height);
     drawing = true;
     start = { x, y };
   });
 
-  window.addEventListener("mousemove", (e) => {
-    if (!drawing || !start) {
-      return;
-    }
+  window.addEventListener("mousemove", (evt) => {
+    if (!drawing || !start) return;
     const rect = el.drawLayer.getBoundingClientRect();
-    const x = clamp01((e.clientX - rect.left) / rect.width);
-    const y = clamp01((e.clientY - rect.top) / rect.height);
+    const x = clamp01((evt.clientX - rect.left) / rect.width);
+    const y = clamp01((evt.clientY - rect.top) / rect.height);
     const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
     state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
     renderBoxes();
-    renderDrawState();
+    renderEditMode();
   });
 
   window.addEventListener("mouseup", () => {
@@ -586,25 +609,19 @@ function initDraw() {
   });
 
   el.drawLayer.addEventListener("click", () => {
-    if (!state.drawMode) {
+    if (!state.drawingActive) {
       state.selectedAnnoId = null;
-      state.editingAnnoId = null;
       renderAll();
     }
   });
 }
 
 function bindEvents() {
-  el.uploadBtn.addEventListener("click", () => {
-    el.uploadInput.click();
-  });
+  el.uploadBtn.addEventListener("click", () => el.uploadInput.click());
 
-  el.uploadInput.addEventListener("change", (e) => {
-    const file = e.target.files?.[0];
-    if (!file) {
-      return;
-    }
-
+  el.uploadInput.addEventListener("change", (evt) => {
+    const file = evt.target.files?.[0];
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       const img = {
@@ -614,130 +631,152 @@ function bindEvents() {
         category: "用户上传",
         contentElement: "page",
         contentKind: "图片",
-        source: "upload",
-        annotations: [],
-        attrs: {
-          id: uid("img"),
-          type: "1",
-          version: "1.0",
-          note: ""
-        }
+        meta: { id: uid("img"), type: "1", version: "1.0", note: "" },
+        annotations: []
       };
-
       state.images.push(img);
       state.selectedImageId = img.id;
       state.selectedAnnoId = null;
-      state.editingAnnoId = null;
-      state.draftRect = null;
-      saveState();
+      state.selectedTagFilterName = "";
       renderAll();
+      saveState();
     };
-
     reader.readAsDataURL(file);
-    e.target.value = "";
+    evt.target.value = "";
   });
 
-  el.saveCurrentPropsBtn.addEventListener("click", () => {
-    const img = selectedImage();
-    if (!img) {
-      return;
-    }
-
-    const anno = selectedAnno();
-    if (anno) {
-      anno.attrs.id = el.propId.value.trim() || anno.attrs.id;
-      anno.attrs.type = el.propType.value.trim() || anno.attrs.type;
-      anno.attrs.version = el.propVersion.value.trim() || anno.attrs.version;
-      anno.attrs.note = el.propNote.value.trim();
-      anno.note = anno.attrs.note;
-      el.annoNote.value = anno.note;
-    } else {
-      img.attrs.id = el.propId.value.trim() || img.attrs.id;
-      img.attrs.type = el.propType.value.trim() || img.attrs.type;
-      img.attrs.version = el.propVersion.value.trim() || img.attrs.version;
-      img.attrs.note = el.propNote.value.trim();
-    }
-
-    saveState();
+  el.enterEditModeBtn.addEventListener("click", () => {
+    state.drawMode = !state.drawMode;
+    state.drawingActive = false;
+    state.draftRect = null;
+    if (!state.drawMode) state.selectedAnnoId = null;
     renderAll();
   });
 
-  el.toggleDrawModeBtn.addEventListener("click", () => {
-    state.drawMode = !state.drawMode;
+  el.startDrawBtn.addEventListener("click", () => {
+    if (!state.drawMode) return;
+    state.drawingActive = !state.drawingActive;
     state.draftRect = null;
-    state.selectedAnnoId = null;
-    if (!state.drawMode) {
-      state.editingAnnoId = null;
-    }
     renderAll();
   });
 
   el.clearDraftBtn.addEventListener("click", () => {
     state.draftRect = null;
-    state.editingAnnoId = null;
-    state.selectedAnnoId = null;
+    state.drawingActive = false;
     el.annoTranscription.value = "";
     el.annoNote.value = "";
     renderAll();
   });
 
+  el.createDraftTagBtn.addEventListener("click", () => {
+    const name = el.draftTagName.value.trim();
+    const parentId = el.draftTagParent.value || null;
+    const attrs = el.draftTagAttrs.value.trim();
+    if (!name) {
+      alert("请填写标签名称");
+      return;
+    }
+    const newTag = { id: uid("tag"), name, parentId, attrs: attrs ? attrs.split(",").map((x) => x.trim()).filter(Boolean) : [], order: templateChildren(parentId).length + 1 };
+    state.templateTags.push(newTag);
+    ensureTemplateOrder();
+    state.activeDraftTagId = newTag.id;
+    if (el.addDraftTagToTemplate.checked) state.selectedTemplateTagId = newTag.id;
+    el.draftTagName.value = "";
+    el.draftTagAttrs.value = "";
+    renderAll();
+    saveState();
+  });
+
   el.saveAnnoBtn.addEventListener("click", () => {
     const img = selectedImage();
-    if (!img) {
-      return;
-    }
-    if (!state.selectedTagId) {
-      alert("请先选择标签");
-      return;
-    }
-    if (!state.draftRect || state.draftRect.w < 0.004 || state.draftRect.h < 0.004) {
-      alert("请先在图片中画出有效区域");
-      return;
-    }
+    if (!img) return;
+    if (!state.activeDraftTagId) { alert("请先选择标签"); return; }
+    if (!state.draftRect || state.draftRect.w < 0.003 || state.draftRect.h < 0.003) { alert("请先拖拽出有效框选区域"); return; }
 
-    const tag = findTag(state.selectedTagId);
-    if (!tag) {
-      alert("标签不存在，请重新选择");
-      return;
-    }
+    const tag = findTemplateTag(state.activeDraftTagId);
+    if (!tag) { alert("标签不存在"); return; }
 
-    const annoId = state.editingAnnoId || uid("anno");
-    const parentAnnoId = findParentAnnoId(img, state.draftRect, annoId);
-    const old = img.annotations.find((item) => item.id === annoId);
+    const attrs = {};
+    (tag.attrs || []).forEach((attr) => {
+      if (attr === "id") attrs.id = "";
+      else if (attr === "type") attrs.type = "1";
+      else if (attr === "version") attrs.version = "1.0";
+      else attrs[attr] = "";
+    });
+    attrs.note = el.annoNote.value.trim();
 
-    const payload = {
-      id: annoId,
+    const anno = {
+      id: uid("anno"),
       tagId: tag.id,
       tagName: tag.name,
-      tagPath: tagPath(tag.id),
+      tagPath: templatePath(tag.id),
       shape: el.annoShapeSelect.value,
       color: el.annoColor.value,
       transcription: el.annoTranscription.value.trim(),
       note: el.annoNote.value.trim(),
       rect: { ...state.draftRect },
-      parentAnnoId,
-      attrs: old?.attrs || {
-        id: uid("box"),
-        type: "1",
-        version: "1.0",
-        note: el.annoNote.value.trim()
-      }
+      attrs,
+      parentAnnoId: null
     };
 
-    ensureAnnoAttrs(payload);
-    payload.attrs.note = payload.note;
+    const idValue = (anno.attrs.id || "").trim();
+    anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
 
-    const idx = img.annotations.findIndex((item) => item.id === payload.id);
-    if (idx >= 0) {
-      img.annotations[idx] = payload;
-    } else {
-      img.annotations.push(payload);
+    img.annotations.push(anno);
+    state.selectedAnnoId = anno.id;
+    state.draftRect = null;
+    state.drawingActive = false;
+    el.annoTranscription.value = "";
+    el.annoNote.value = "";
+    renderAll();
+    saveState();
+  });
+
+  el.saveCurrentPropsBtn.addEventListener("click", () => {
+    const img = selectedImage();
+    if (!img) return;
+    const anno = selectedAnno();
+    if (!anno) {
+      Object.keys(state.propInputs).forEach((key) => { img.meta[key] = state.propInputs[key].value.trim(); });
+      img.meta.note = el.propNote.value.trim();
+      renderAll();
+      saveState();
+      return;
     }
 
-    state.selectedAnnoId = payload.id;
-    state.editingAnnoId = null;
-    state.draftRect = null;
-    state.drawMode = false;
+    Object.keys(state.propInputs).forEach((key) => { anno.attrs[key] = state.propInputs[key].value.trim(); });
+    anno.attrs.note = el.propNote.value.trim();
+    anno.note = anno.attrs.note;
+    const idValue = (anno.attrs.id || "").trim();
+    anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
+    renderAll();
+    saveState();
+  });
+
+  el.templateTagSelect.addEventListener("change", () => {
+    state.selectedTemplateTagId = el.templateTagSelect.value;
+    renderTemplateAttrSelect();
+    saveState();
+  });
+
+  el.addAttrBtn.addEventListener("click", () => {
+    const tag = findTemplateTag(state.selectedTemplateTagId);
+    const attr = el.newAttrForTemplateTag.value.trim();
+    if (!tag || !attr) return;
+    tag.attrs = tag.attrs || [];
+    if (!tag.attrs.includes(attr)) {
+      tag.attrs.push(attr);
+      saveState();
+      renderAll();
+    }
+    el.newAttrForTemplateTag.value = "";
+  });
+
+  el.deleteAttrBtn.addEventListener("click", () => {
+    const tag = findTemplateTag(state.selectedTemplateTagId);
+    const attr = el.templateAttrSelect.value;
+    if (!tag || !attr) return;
+    tag.attrs = (tag.attrs || []).filter((a) => a !== attr);
     saveState();
     renderAll();
   });
@@ -745,36 +784,54 @@ function bindEvents() {
   el.addTagBtn.addEventListener("click", () => {
     const name = el.newTagName.value.trim();
     const parentId = el.newTagParent.value || null;
-    const attrsRaw = el.newTagAttrs.value.trim();
-
-    if (!name) {
-      alert("请填写标签名称");
-      return;
-    }
-
-    const duplicated = state.tagDefs.some((tag) => tag.parentId === parentId && tag.name === name);
-    if (duplicated) {
-      alert("同级下标签名重复");
-      return;
-    }
-
-    const tag = {
-      id: uid("tag"),
-      name,
-      parentId,
-      attrs: attrsRaw ? attrsRaw.split(",").map((s) => s.trim()).filter(Boolean) : []
-    };
-
-    state.tagDefs.push(tag);
-    state.selectedTagId = tag.id;
+    const attrs = el.newTagAttrs.value.trim();
+    if (!name) { alert("请填写标签名称"); return; }
+    const duplicated = state.templateTags.some((tag) => tag.parentId === parentId && tag.name === name);
+    if (duplicated) { alert("同级标签名称重复"); return; }
+    state.templateTags.push({ id: uid("tag"), name, parentId, attrs: attrs ? attrs.split(",").map((a) => a.trim()).filter(Boolean) : [], order: templateChildren(parentId).length + 1 });
+    ensureTemplateOrder();
     el.newTagName.value = "";
     el.newTagAttrs.value = "";
     saveState();
     renderAll();
   });
+
+  el.deleteTagBtn.addEventListener("click", () => {
+    const tag = findTemplateTag(state.selectedTemplateTagId);
+    if (!tag) return;
+    if (!window.confirm(`确定删除模板标签 ${tag.name} 及其子标签？`)) return;
+    const removeIds = new Set();
+    function collect(id) { removeIds.add(id); templateChildren(id).forEach((child) => collect(child.id)); }
+    collect(tag.id);
+    state.templateTags = state.templateTags.filter((item) => !removeIds.has(item.id));
+    ensureTemplateOrder();
+    state.selectedTemplateTagId = state.templateTags[0]?.id || null;
+    saveState();
+    renderAll();
+  });
+
+  function swapSibling(tagId, direction) {
+    const tag = findTemplateTag(tagId);
+    if (!tag) return;
+    const siblings = templateChildren(tag.parentId);
+    const idx = siblings.findIndex((s) => s.id === tag.id);
+    const nextIdx = idx + direction;
+    if (idx < 0 || nextIdx < 0 || nextIdx >= siblings.length) return;
+    const a = siblings[idx];
+    const b = siblings[nextIdx];
+    const tempOrder = a.order;
+    a.order = b.order;
+    b.order = tempOrder;
+    ensureTemplateOrder();
+    saveState();
+    renderAll();
+  }
+
+  el.tagMoveUpBtn.addEventListener("click", () => swapSibling(state.selectedTemplateTagId, -1));
+  el.tagMoveDownBtn.addEventListener("click", () => swapSibling(state.selectedTemplateTagId, 1));
 }
 
 loadState();
-initDraw();
+bindDrawEvents();
 bindEvents();
 renderAll();

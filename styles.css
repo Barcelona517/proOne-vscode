@@ -214,6 +214,29 @@ body {
   margin-bottom: 8px;
 }
 
+#propsEditor {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.prop-row {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.prop-row span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.prop-row input {
+  margin-top: 0;
+}
+
 label {
   display: block;
   font-size: 13px;
@@ -255,6 +278,43 @@ button.primary {
 
 .single-bottom-gap {
   margin-bottom: 8px;
+}
+
+.hidden-block {
+  display: none;
+}
+
+.hidden-block.active {
+  display: block;
+}
+
+.add-tag-box {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff8ee;
+}
+
+.add-tag-box summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.check-line input {
+  width: auto;
+  margin: 0;
+}
+
+.check-line span {
+  margin-top: 2px;
 }
 
 .tag-tree {
@@ -309,6 +369,12 @@ button.primary {
   background: var(--brand);
   color: #fff;
   border-color: var(--brand);
+}
+
+hr {
+  border: none;
+  border-top: 1px dashed var(--line);
+  margin: 10px 0;
 }
 
 .anno-list {
