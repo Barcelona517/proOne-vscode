@@ -122,25 +122,17 @@
           <button id="deleteTagBtn">删除模板标签</button>
 
           <label>为模板标签新增属性
-            <input id="newAttrForTemplateTag" type="text" placeholder="属性名，例如：id" />
+            <div class="inline-action-row">
+              <input id="newAttrForTemplateTag" type="text" placeholder="属性名，例如：id" />
+              <button id="addAttrBtn" class="compact-btn" type="button">新增属性</button>
+            </div>
           </label>
-          <button id="addAttrBtn">新增属性</button>
           <label>删除模板标签属性
-            <select id="templateAttrSelect"></select>
+            <div class="inline-action-row">
+              <select id="templateAttrSelect"></select>
+              <button id="deleteAttrBtn" class="compact-btn" type="button">删除属性</button>
+            </div>
           </label>
-          <button id="deleteAttrBtn">删除属性</button>
-
-          <hr />
-          <label>新增模板标签名称
-            <input id="newTagName" type="text" placeholder="例如：line / note / customTag" />
-          </label>
-          <label>插入到父标签
-            <select id="newTagParent"></select>
-          </label>
-          <label>属性(逗号分隔)
-            <input id="newTagAttrs" type="text" placeholder="例如：id,type,version" />
-          </label>
-            <button id="addTagBtn">新增模板标签</button>
           </div>
         </div>
       </aside>

@@ -63,7 +63,8 @@ const state = {
   drawingActive: false,
   draftRect: null,
   activeDraftTagId: null,
-  propInputs: {}
+  propInputs: {},
+  boxInteraction: null
 };
 
 const el = {
@@ -104,10 +105,6 @@ const el = {
   addAttrBtn: document.getElementById("addAttrBtn"),
   templateAttrSelect: document.getElementById("templateAttrSelect"),
   deleteAttrBtn: document.getElementById("deleteAttrBtn"),
-  newTagName: document.getElementById("newTagName"),
-  newTagParent: document.getElementById("newTagParent"),
-  newTagAttrs: document.getElementById("newTagAttrs"),
-  addTagBtn: document.getElementById("addTagBtn"),
   uploadInput: document.getElementById("uploadInput"),
   uploadBtn: document.getElementById("uploadBtn")
 };
@@ -195,6 +192,51 @@ function ensureImageMeta(img, idx) {
 function setIfNotEmpty(obj, key, value) {
   const trimmed = (value || "").trim();
   if (trimmed) obj[key] = trimmed;
+}
+
+function templateDepth(tagId) {
+  let depth = 0;
+  let cursor = findTemplateTag(tagId);
+  while (cursor) {
+    depth += 1;
+    cursor = cursor.parentId ? findTemplateTag(cursor.parentId) : null;
+  }
+  return depth;
+}
+
+function pointInRect(rect, x, y) {
+  return x >= rect.x && y >= rect.y && x <= rect.x + rect.w && y <= rect.y + rect.h;
+}
+
+function annoArea(anno) {
+  return Math.max(0.000001, anno.rect.w * anno.rect.h);
+}
+
+function normalizeAnnoRectForShape(rect, shape) {
+  const base = {
+    x: clamp01(rect.x),
+    y: clamp01(rect.y),
+    w: Math.min(1, Math.max(0.003, rect.w)),
+    h: Math.min(1, Math.max(0.003, rect.h))
+  };
+  if (base.x + base.w > 1) base.x = 1 - base.w;
+  if (base.y + base.h > 1) base.y = 1 - base.h;
+  return toShapeRect(base, shape);
+}
+
+function findAnnoById(img, annoId) {
+  return img.annotations.find((anno) => anno.id === annoId) || null;
+}
+
+function pickTopAnnoAtPoint(img, x, y) {
+  const hits = img.annotations.filter((anno) => pointInRect(anno.rect, x, y));
+  if (hits.length === 0) return null;
+  hits.sort((a, b) => {
+    const depthDiff = templateDepth(b.tagId) - templateDepth(a.tagId);
+    if (depthDiff !== 0) return depthDiff;
+    return annoArea(a) - annoArea(b);
+  });
+  return hits[0];
 }
 
 function saveState() {
@@ -303,6 +345,7 @@ function renderBoxes() {
     const box = document.createElement("div");
     box.className = `box shape-${anno.shape}`;
     if (anno.id === state.selectedAnnoId) box.classList.add("selected");
+    box.style.zIndex = String(50 + templateDepth(anno.tagId));
     if (state.selectedTagFilterName) {
       if (anno.tagName === state.selectedTagFilterName) box.classList.add("matching-tag");
       else box.classList.add("dimmed");
@@ -324,9 +367,66 @@ function renderBoxes() {
     box.title = `${anno.tagPath}${anno.parentAnnoId ? " (子框)" : ""}`;
     box.addEventListener("click", (evt) => {
       evt.stopPropagation();
-      state.selectedAnnoId = anno.id;
+      const layerRect = el.drawLayer.getBoundingClientRect();
+      const x = clamp01((evt.clientX - layerRect.left) / layerRect.width);
+      const y = clamp01((evt.clientY - layerRect.top) / layerRect.height);
+      const picked = pickTopAnnoAtPoint(img, x, y);
+      if (picked) state.selectedAnnoId = picked.id;
       renderAll();
     });
+    box.addEventListener("mousedown", (evt) => {
+      if (!state.drawMode || state.drawingActive) return;
+      if (evt.target.closest(".resize-handle") || evt.target.closest(".box-delete")) return;
+      evt.stopPropagation();
+      state.selectedAnnoId = anno.id;
+      const layerRect = el.drawLayer.getBoundingClientRect();
+      state.boxInteraction = {
+        mode: "move",
+        annoId: anno.id,
+        edge: "",
+        startX: evt.clientX,
+        startY: evt.clientY,
+        layerWidth: layerRect.width,
+        layerHeight: layerRect.height,
+        originalRect: { ...anno.rect }
+      };
+    });
+
+    if (anno.id === state.selectedAnnoId) {
+      const delBtn = document.createElement("button");
+      delBtn.className = "box-delete";
+      delBtn.textContent = "×";
+      delBtn.title = "删除该框";
+      delBtn.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        const keep = img.annotations.filter((it) => it.id !== anno.id);
+        img.annotations = keep;
+        state.selectedAnnoId = null;
+        renderAll();
+        saveState();
+      });
+      box.appendChild(delBtn);
+
+      ["n", "s", "e", "w", "ne", "nw", "se", "sw"].forEach((edge) => {
+        const handle = document.createElement("div");
+        handle.className = `resize-handle ${edge}`;
+        handle.addEventListener("mousedown", (evt) => {
+          evt.stopPropagation();
+          const layerRect = el.drawLayer.getBoundingClientRect();
+          state.boxInteraction = {
+            mode: "resize",
+            annoId: anno.id,
+            edge,
+            startX: evt.clientX,
+            startY: evt.clientY,
+            layerWidth: layerRect.width,
+            layerHeight: layerRect.height,
+            originalRect: { ...anno.rect }
+          };
+        });
+        box.appendChild(handle);
+      });
+    }
     el.drawLayer.appendChild(box);
   });
 
@@ -491,48 +591,85 @@ function renderImageTagTree() {
   el.imageTagTree.innerHTML = "";
   if (!img) return;
 
-  const names = [...new Set(img.annotations.map((anno) => anno.tagName))].sort();
-  const ul = document.createElement("ul");
-  names.forEach((name) => {
+  if (img.annotations.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "当前图片暂无标签";
+    const ul = document.createElement("ul");
+    ul.appendChild(li);
+    el.imageTagTree.appendChild(ul);
+    return;
+  }
+
+  const childMap = new Map();
+  function pushChild(parentId, anno) {
+    const key = parentId || "ROOT";
+    if (!childMap.has(key)) childMap.set(key, []);
+    childMap.get(key).push(anno);
+  }
+
+  img.annotations.forEach((anno) => {
+    const parentExists = anno.parentAnnoId && findAnnoById(img, anno.parentAnnoId);
+    pushChild(parentExists ? anno.parentAnnoId : null, anno);
+  });
+
+  function sortNodes(list) {
+    list.sort((a, b) => {
+      const depthDiff = templateDepth(a.tagId) - templateDepth(b.tagId);
+      if (depthDiff !== 0) return depthDiff;
+      return a.tagName.localeCompare(b.tagName, "zh-CN");
+    });
+    return list;
+  }
+
+  function renderNode(anno) {
     const li = document.createElement("li");
     const line = document.createElement("div");
     line.className = "tree-node-line clickable";
     const label = document.createElement("span");
-    label.textContent = `${name} (${img.annotations.filter((anno) => anno.tagName === name).length})`;
+    const mark = anno.attrs.id ? `#${anno.attrs.id}` : "";
+    label.textContent = `${anno.tagName}${mark}`;
     line.addEventListener("click", () => {
-      state.selectedTagFilterName = state.selectedTagFilterName === name ? "" : name;
+      state.selectedAnnoId = anno.id;
+      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
       renderAll();
     });
     const btn = document.createElement("button");
-    btn.className = `tree-pick-btn ${state.selectedTagFilterName === name ? "active" : ""}`;
-    btn.textContent = state.selectedTagFilterName === name ? "已高亮" : "高亮";
+    btn.className = `tree-pick-btn ${state.selectedTagFilterName === anno.tagName ? "active" : ""}`;
+    btn.textContent = state.selectedTagFilterName === anno.tagName ? "已高亮" : "高亮";
     btn.addEventListener("click", (evt) => {
       evt.stopPropagation();
-      state.selectedTagFilterName = state.selectedTagFilterName === name ? "" : name;
+      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
+      state.selectedAnnoId = anno.id;
       renderAll();
     });
     line.appendChild(label);
     line.appendChild(btn);
     li.appendChild(line);
-    ul.appendChild(li);
+
+    const children = sortNodes([...(childMap.get(anno.id) || [])]);
+    if (children.length > 0) {
+      const ul = document.createElement("ul");
+      children.forEach((child) => ul.appendChild(renderNode(child)));
+      li.appendChild(ul);
+    }
+    return li;
+  }
+
+  const ul = document.createElement("ul");
+  const roots = sortNodes([...(childMap.get("ROOT") || [])]);
+  roots.forEach((rootAnno) => ul.appendChild(renderNode(rootAnno)));
+
+  const clearLi = document.createElement("li");
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "tree-pick-btn";
+  clearBtn.textContent = "取消高亮";
+  clearBtn.addEventListener("click", () => {
+    state.selectedTagFilterName = "";
+    renderAll();
   });
-  if (names.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "当前图片暂无标签";
-    ul.appendChild(li);
-  }
-  if (names.length > 0) {
-    const clearLi = document.createElement("li");
-    const clearBtn = document.createElement("button");
-    clearBtn.className = "tree-pick-btn";
-    clearBtn.textContent = "取消高亮";
-    clearBtn.addEventListener("click", () => {
-      state.selectedTagFilterName = "";
-      renderAll();
-    });
-    clearLi.appendChild(clearBtn);
-    ul.appendChild(clearLi);
-  }
+  clearLi.appendChild(clearBtn);
+  ul.appendChild(clearLi);
+
   el.imageTagTree.appendChild(ul);
 }
 
@@ -556,7 +693,6 @@ function renderSelectedTagInfo() {
 
 function renderDraftTagParentOptions() {
   el.draftTagParent.innerHTML = "";
-  el.newTagParent.innerHTML = "";
   function append(select, tag, depth) {
     const option = document.createElement("option");
     option.value = tag.id;
@@ -565,7 +701,6 @@ function renderDraftTagParentOptions() {
   }
   function walk(tag, depth) {
     append(el.draftTagParent, tag, depth);
-    append(el.newTagParent, tag, depth);
     templateChildren(tag.id).forEach((child) => walk(child, depth + 1));
   }
   templateChildren(null).forEach((root) => walk(root, 0));
@@ -628,24 +763,77 @@ function bindDrawEvents() {
   });
 
   window.addEventListener("mousemove", (evt) => {
-    if (!drawing || !start) return;
-    const rect = el.drawLayer.getBoundingClientRect();
-    const x = clamp01((evt.clientX - rect.left) / rect.width);
-    const y = clamp01((evt.clientY - rect.top) / rect.height);
-    const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
-    state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
-    renderBoxes();
-    renderEditMode();
+    if (state.boxInteraction) {
+      const img = selectedImage();
+      if (!img) return;
+      const interaction = state.boxInteraction;
+      const anno = findAnnoById(img, interaction.annoId);
+      if (!anno) return;
+
+      const dx = (evt.clientX - interaction.startX) / interaction.layerWidth;
+      const dy = (evt.clientY - interaction.startY) / interaction.layerHeight;
+      const orig = interaction.originalRect;
+
+      if (interaction.mode === "move") {
+        const moved = {
+          x: orig.x + dx,
+          y: orig.y + dy,
+          w: orig.w,
+          h: orig.h
+        };
+        anno.rect = normalizeAnnoRectForShape(moved, anno.shape);
+      } else {
+        const edge = interaction.edge;
+        let x1 = orig.x;
+        let y1 = orig.y;
+        let x2 = orig.x + orig.w;
+        let y2 = orig.y + orig.h;
+        if (edge.includes("w")) x1 += dx;
+        if (edge.includes("e")) x2 += dx;
+        if (edge.includes("n")) y1 += dy;
+        if (edge.includes("s")) y2 += dy;
+        const next = normalizeRect({ x1, y1, x2, y2 });
+        anno.rect = normalizeAnnoRectForShape(next, anno.shape);
+      }
+      renderBoxes();
+      return;
+    }
+
+    if (drawing && start) {
+      const rect = el.drawLayer.getBoundingClientRect();
+      const x = clamp01((evt.clientX - rect.left) / rect.width);
+      const y = clamp01((evt.clientY - rect.top) / rect.height);
+      const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
+      state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
+      renderBoxes();
+      renderEditMode();
+    }
   });
 
   window.addEventListener("mouseup", () => {
+    const img = selectedImage();
+    if (state.boxInteraction && img) {
+      const anno = findAnnoById(img, state.boxInteraction.annoId);
+      if (anno) {
+        const idValue = (anno.attrs.id || "").trim();
+        anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
+        saveState();
+      }
+    }
+    state.boxInteraction = null;
     drawing = false;
     start = null;
   });
 
-  el.drawLayer.addEventListener("click", () => {
+  el.drawLayer.addEventListener("click", (evt) => {
     if (!state.drawingActive) {
-      state.selectedAnnoId = null;
+      const img = selectedImage();
+      if (!img) return;
+      const rect = el.drawLayer.getBoundingClientRect();
+      const x = clamp01((evt.clientX - rect.left) / rect.width);
+      const y = clamp01((evt.clientY - rect.top) / rect.height);
+      const picked = pickTopAnnoAtPoint(img, x, y);
+      state.selectedAnnoId = picked ? picked.id : null;
       renderAll();
     }
   });
@@ -816,21 +1004,6 @@ function bindEvents() {
     const attr = el.templateAttrSelect.value;
     if (!tag || !attr) return;
     tag.attrs = (tag.attrs || []).filter((a) => a !== attr);
-    saveState();
-    renderAll();
-  });
-
-  el.addTagBtn.addEventListener("click", () => {
-    const name = el.newTagName.value.trim();
-    const parentId = el.newTagParent.value || null;
-    const attrs = el.newTagAttrs.value.trim();
-    if (!name) { alert("请填写标签名称"); return; }
-    const duplicated = state.templateTags.some((tag) => tag.parentId === parentId && tag.name === name);
-    if (duplicated) { alert("同级标签名称重复"); return; }
-    state.templateTags.push({ id: uid("tag"), name, parentId, attrs: attrs ? attrs.split(",").map((a) => a.trim()).filter(Boolean) : [], order: templateChildren(parentId).length + 1 });
-    ensureTemplateOrder();
-    el.newTagName.value = "";
-    el.newTagAttrs.value = "";
     saveState();
     renderAll();
   });

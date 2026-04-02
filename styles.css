@@ -168,6 +168,43 @@ body {
   cursor: pointer;
 }
 
+.box-delete {
+  position: absolute;
+  right: -9px;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #76291f;
+  border-radius: 50%;
+  background: #8f3b2e;
+  color: #fff;
+  font-size: 12px;
+  line-height: 14px;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.resize-handle {
+  position: absolute;
+  background: #fff;
+  border: 1px solid #111;
+  width: 9px;
+  height: 9px;
+  z-index: 5;
+}
+
+.resize-handle.n { top: -6px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.resize-handle.s { bottom: -6px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.resize-handle.e { right: -6px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+.resize-handle.w { left: -6px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+.resize-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.resize-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.resize-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.resize-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+
 .box.temp {
   border-style: dashed;
 }
@@ -235,6 +272,27 @@ body {
   padding: 4px 8px;
   font-size: 12px;
   border-radius: 5px;
+}
+
+.inline-action-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.inline-action-row input,
+.inline-action-row select {
+  margin-top: 0;
+}
+
+.compact-btn {
+  width: auto;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 #propsEditor {
