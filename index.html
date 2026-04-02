@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>古籍 Online Editor - 基础版</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <h1>古籍 Online Editor</h1>
+      <div class="topbar-actions">
+        <input id="uploadInput" type="file" accept="image/*" class="hidden" />
+        <button id="uploadBtn" class="primary">添加图片</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="left-panel">
+        <div class="panel-title">概览</div>
+        <div id="thumbList" class="thumb-list"></div>
+      </aside>
+
+      <section class="center-panel">
+        <div class="viewer-head">
+          <div id="viewerTitle">未选择图片</div>
+          <div class="hint">先在右侧选择标签和画框样式，再进入画框模式</div>
+        </div>
+        <div id="canvasWrap" class="canvas-wrap">
+          <img id="mainImage" alt="主编辑图" draggable="false" />
+          <div id="drawLayer" class="draw-layer"></div>
+        </div>
+      </section>
+
+      <aside class="right-panel">
+        <div class="panel-title">注释与编辑</div>
+
+        <div class="section">
+          <div class="section-title">当前图片属性</div>
+          <label>内容元素(content)
+            <select id="imageContentElement">
+              <option value="text">text</option>
+              <option value="page">page</option>
+              <option value="div">div</option>
+            </select>
+          </label>
+          <label>页面类型
+            <select id="imageContentKind">
+              <option value="文字">文字</option>
+              <option value="图片">图片</option>
+              <option value="混合">混合</option>
+            </select>
+          </label>
+          <button id="saveImageMetaBtn">保存图片属性</button>
+        </div>
+
+        <div class="section">
+          <div class="section-title">XML 标签树（可绑定任意标签）</div>
+          <div id="tagTree" class="tag-tree"></div>
+          <label>当前标注标签
+            <select id="annoTagSelect"></select>
+          </label>
+        </div>
+
+        <div class="section">
+          <div class="section-title">新增标签并插入树中</div>
+          <label>标签名称
+            <input id="newTagName" type="text" placeholder="例如：line / note / customTag" />
+          </label>
+          <label>插入到父标签
+            <select id="newTagParent"></select>
+          </label>
+          <label>标签对应样式
+            <select id="newTagShape">
+              <option value="rect">方框</option>
+              <option value="line">横线</option>
+              <option value="wave">波浪线</option>
+            </select>
+          </label>
+          <label>属性(逗号分隔)
+            <input id="newTagAttrs" type="text" placeholder="例如：id,type,note" />
+          </label>
+          <button id="addTagBtn">新增标签</button>
+        </div>
+
+        <div class="section">
+          <div class="section-title">画框模式与保存</div>
+          <div id="drawState" class="muted">先选标签，再点击“进入画框模式”</div>
+          <div class="row-actions single-bottom-gap">
+            <button id="toggleDrawModeBtn" class="primary">进入画框模式</button>
+            <button id="clearDraftBtn">清空草稿</button>
+          </div>
+          <label>当前样式
+            <select id="annoShapeSelect">
+              <option value="rect">方框</option>
+              <option value="line">横线</option>
+              <option value="wave">波浪线</option>
+            </select>
+          </label>
+          <label>简体转写
+            <input id="annoTranscription" type="text" placeholder="输入简体字/文本" />
+          </label>
+          <label>注释
+            <textarea id="annoNote" rows="3" placeholder="输入注释"></textarea>
+          </label>
+          <div class="row-actions one-col">
+            <button id="saveAnnoBtn" class="primary">保存标注</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">当前图片标注列表</div>
+          <div id="annoList" class="anno-list"></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

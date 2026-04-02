@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code local
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Temp extracted docs
+.tmp_docx/
