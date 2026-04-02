@@ -165,6 +165,7 @@ body {
   border: 2px solid var(--accent);
   background: rgba(46, 111, 134, 0.16);
   --shape-color: var(--accent);
+  cursor: pointer;
 }
 
 .box.temp {
@@ -189,16 +190,15 @@ body {
   height: 8px;
 }
 
+.box.selected {
+  box-shadow: 0 0 0 2px #111 inset, 0 0 0 2px #111;
+}
+
 .box.temp.shape-line,
 .box.temp.shape-wave {
   border-top-style: dashed;
   opacity: 0.8;
 }
-
-.box.label-文字 { border-color: #b54f24; background: rgba(181, 79, 36, 0.18); }
-.box.label-图片 { border-color: #2c7a56; background: rgba(44, 122, 86, 0.18); }
-.box.label-句 { border-color: #7e5ac5; background: rgba(126, 90, 197, 0.18); }
-.box.label-段 { border-color: #2878b5; background: rgba(40, 120, 181, 0.18); }
 
 .section {
   border: 1px solid var(--line);
@@ -267,6 +267,10 @@ button.primary {
   margin-bottom: 8px;
 }
 
+.tag-tree.picker {
+  max-height: 160px;
+}
+
 .tag-tree ul {
   margin: 4px 0 4px 16px;
   padding: 0;
@@ -280,6 +284,31 @@ button.primary {
 .tag-meta {
   color: var(--muted);
   margin-left: 4px;
+}
+
+.picker-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tree-node-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tree-pick-btn {
+  width: auto;
+  margin: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.tree-pick-btn.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
 }
 
 .anno-list {

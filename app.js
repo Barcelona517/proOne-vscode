@@ -1,4 +1,4 @@
-const STORAGE_KEY = "guji_editor_v2";
+const STORAGE_KEY = "guji_editor_v3";
 
 const seedImages = [
   { path: "古籍示例/顶格/试验样例-00000002-00008.jpg", category: "顶格", element: "text", kind: "文字" },
@@ -35,11 +35,34 @@ const seedImages = [
   { path: "古籍示例/标准样式/3 (10).png", category: "标准样式", element: "text", kind: "文字" }
 ];
 
+const builtInTags = [
+  { id: "t_article", name: "article", parentId: null, attrs: ["id", "type", "version"] },
+  { id: "t_head", name: "head", parentId: "t_article", attrs: ["title", "authors"] },
+  { id: "t_content", name: "content", parentId: "t_article", attrs: ["id"] },
+  { id: "t_view", name: "view", parentId: "t_article", attrs: ["mode"] },
+  { id: "t_title", name: "title", parentId: "t_head", attrs: ["name", "note", "type"] },
+  { id: "t_subtitle", name: "subtitle", parentId: "t_head", attrs: ["name"] },
+  { id: "t_authors", name: "authors", parentId: "t_head", attrs: ["name"] },
+  { id: "t_book", name: "book", parentId: "t_head", attrs: ["name"] },
+  { id: "t_date", name: "date", parentId: "t_head", attrs: ["value"] },
+  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "type", "note"] },
+  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "src"] },
+  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "type"] },
+  { id: "t_sources", name: "sources", parentId: "t_view", attrs: ["name"] }
+];
+
+const shapeNameMap = {
+  rect: "方框",
+  line: "横线",
+  wave: "波浪线"
+};
+
 const state = {
   images: [],
   tagDefs: [],
   selectedImageId: null,
   selectedTagId: null,
+  selectedAnnoId: null,
   drawMode: false,
   draftRect: null,
   editingAnnoId: null
@@ -50,60 +73,49 @@ const el = {
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
   viewerTitle: document.getElementById("viewerTitle"),
-  annoList: document.getElementById("annoList"),
-  tagTree: document.getElementById("tagTree"),
-  annoTagSelect: document.getElementById("annoTagSelect"),
-  newTagName: document.getElementById("newTagName"),
-  newTagParent: document.getElementById("newTagParent"),
-  newTagShape: document.getElementById("newTagShape"),
-  newTagAttrs: document.getElementById("newTagAttrs"),
-  addTagBtn: document.getElementById("addTagBtn"),
-  toggleDrawModeBtn: document.getElementById("toggleDrawModeBtn"),
+
+  currentTargetHint: document.getElementById("currentTargetHint"),
+  propId: document.getElementById("propId"),
+  propType: document.getElementById("propType"),
+  propVersion: document.getElementById("propVersion"),
+  propNote: document.getElementById("propNote"),
+  saveCurrentPropsBtn: document.getElementById("saveCurrentPropsBtn"),
+
   drawState: document.getElementById("drawState"),
-  uploadInput: document.getElementById("uploadInput"),
-  uploadBtn: document.getElementById("uploadBtn"),
-  imageContentElement: document.getElementById("imageContentElement"),
-  imageContentKind: document.getElementById("imageContentKind"),
-  saveImageMetaBtn: document.getElementById("saveImageMetaBtn"),
+  toggleDrawModeBtn: document.getElementById("toggleDrawModeBtn"),
+  clearDraftBtn: document.getElementById("clearDraftBtn"),
   annoShapeSelect: document.getElementById("annoShapeSelect"),
+  annoColor: document.getElementById("annoColor"),
+  tagPickerTree: document.getElementById("tagPickerTree"),
+  selectedTagInfo: document.getElementById("selectedTagInfo"),
   annoTranscription: document.getElementById("annoTranscription"),
   annoNote: document.getElementById("annoNote"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
-  clearDraftBtn: document.getElementById("clearDraftBtn")
-};
 
-const builtInTags = [
-  { id: "t_article", name: "article", parentId: null, shape: "rect", attrs: ["id", "type", "version"] },
-  { id: "t_head", name: "head", parentId: "t_article", shape: "rect", attrs: ["title", "authors"] },
-  { id: "t_content", name: "content", parentId: "t_article", shape: "rect", attrs: ["id"] },
-  { id: "t_view", name: "view", parentId: "t_article", shape: "rect", attrs: ["mode"] },
-  { id: "t_title", name: "title", parentId: "t_head", shape: "line", attrs: ["name", "note", "type"] },
-  { id: "t_subtitle", name: "subtitle", parentId: "t_head", shape: "line", attrs: ["name"] },
-  { id: "t_authors", name: "authors", parentId: "t_head", shape: "rect", attrs: ["name"] },
-  { id: "t_book", name: "book", parentId: "t_head", shape: "rect", attrs: ["name"] },
-  { id: "t_date", name: "date", parentId: "t_head", shape: "line", attrs: ["value"] },
-  { id: "t_text", name: "text", parentId: "t_content", shape: "rect", attrs: ["id", "type", "note"] },
-  { id: "t_page", name: "page", parentId: "t_content", shape: "rect", attrs: ["id", "src"] },
-  { id: "t_div", name: "div", parentId: "t_content", shape: "wave", attrs: ["id", "type"] },
-  { id: "t_sources", name: "sources", parentId: "t_view", shape: "line", attrs: ["name"] }
-];
+  tagTree: document.getElementById("tagTree"),
+  newTagName: document.getElementById("newTagName"),
+  newTagParent: document.getElementById("newTagParent"),
+  newTagAttrs: document.getElementById("newTagAttrs"),
+  addTagBtn: document.getElementById("addTagBtn"),
 
-const shapeNameMap = {
-  rect: "方框",
-  line: "横线",
-  wave: "波浪线"
+  uploadInput: document.getElementById("uploadInput"),
+  uploadBtn: document.getElementById("uploadBtn")
 };
 
 function uid(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function encodePath(path) {
+  return path.split("/").map((part) => encodeURIComponent(part)).join("/");
+}
+
 function fileToDisplayName(path) {
   return path.split("/").pop() || path;
 }
 
-function encodePath(path) {
-  return path.split("/").map((p) => encodeURIComponent(p)).join("/");
+function clamp01(v) {
+  return Math.max(0, Math.min(1, v));
 }
 
 function normalizeRect(rect) {
@@ -114,43 +126,73 @@ function normalizeRect(rect) {
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
 
-function clamp01(v) {
-  return Math.max(0, Math.min(1, v));
+function toShapeRect(base, shape) {
+  const rect = { ...base };
+  if (shape === "line" || shape === "wave") {
+    rect.h = Math.max(rect.h, 0.006);
+  }
+  return rect;
 }
 
-function hashColor(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i += 1) {
-    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
-  }
-  const palette = ["#b54f24", "#2c7a56", "#7e5ac5", "#2878b5", "#8f3b2e", "#4f6d7a", "#ab5f14"];
-  return palette[hash % palette.length];
+function hexToRgba(hex, alpha) {
+  const h = hex.replace("#", "");
+  const normalized = h.length === 3
+    ? h.split("").map((ch) => ch + ch).join("")
+    : h;
+  const int = Number.parseInt(normalized, 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function findTag(id) {
   return state.tagDefs.find((tag) => tag.id === id) || null;
 }
 
-function tagPath(tagId) {
-  const chain = [];
-  let cursor = findTag(tagId);
-  while (cursor) {
-    chain.unshift(cursor.name);
-    cursor = cursor.parentId ? findTag(cursor.parentId) : null;
-  }
-  return chain.join("/");
-}
-
 function childrenOf(parentId) {
   return state.tagDefs.filter((tag) => tag.parentId === parentId);
 }
 
-function toShapeRect(normalizedRect, shape) {
-  const base = { ...normalizedRect };
-  if (shape === "line" || shape === "wave") {
-    base.h = Math.max(base.h, 0.008);
+function tagPath(tagId) {
+  const arr = [];
+  let cursor = findTag(tagId);
+  while (cursor) {
+    arr.unshift(cursor.name);
+    cursor = cursor.parentId ? findTag(cursor.parentId) : null;
   }
-  return base;
+  return arr.join("/");
+}
+
+function selectedImage() {
+  return state.images.find((img) => img.id === state.selectedImageId) || null;
+}
+
+function selectedAnno() {
+  const img = selectedImage();
+  if (!img || !state.selectedAnnoId) {
+    return null;
+  }
+  return img.annotations.find((anno) => anno.id === state.selectedAnnoId) || null;
+}
+
+function ensureImageAttrs(image) {
+  image.attrs = image.attrs || {};
+  image.attrs.id = image.attrs.id || uid("img");
+  image.attrs.type = image.attrs.type || "1";
+  image.attrs.version = image.attrs.version || "1.0";
+  image.attrs.note = image.attrs.note || "";
+}
+
+function ensureAnnoAttrs(anno) {
+  anno.attrs = anno.attrs || {};
+  anno.attrs.id = anno.attrs.id || uid("box");
+  anno.attrs.type = anno.attrs.type || "1";
+  anno.attrs.version = anno.attrs.version || "1.0";
+  anno.attrs.note = anno.attrs.note || anno.note || "";
+  anno.color = anno.color || "#2e6f86";
+  anno.shape = anno.shape || "rect";
+  anno.parentAnnoId = anno.parentAnnoId || null;
 }
 
 function loadState() {
@@ -158,11 +200,17 @@ function loadState() {
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.images) && parsed.images.length > 0 && Array.isArray(parsed.tagDefs)) {
+      if (Array.isArray(parsed.images) && Array.isArray(parsed.tagDefs) && parsed.images.length > 0) {
         state.images = parsed.images;
         state.tagDefs = parsed.tagDefs;
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
         state.selectedTagId = parsed.selectedTagId || parsed.tagDefs[0]?.id || null;
+
+        state.images.forEach((img) => {
+          ensureImageAttrs(img);
+          img.annotations = img.annotations || [];
+          img.annotations.forEach((anno) => ensureAnnoAttrs(anno));
+        });
         return;
       }
     } catch (_) {
@@ -170,16 +218,26 @@ function loadState() {
     }
   }
 
-  state.images = seedImages.map((item, idx) => ({
-    id: `seed_${idx + 1}`,
-    name: fileToDisplayName(item.path),
-    src: encodePath(item.path),
-    category: item.category,
-    contentElement: item.element,
-    contentKind: item.kind,
-    source: "seed",
-    annotations: []
-  }));
+  state.images = seedImages.map((item, idx) => {
+    const image = {
+      id: `seed_${idx + 1}`,
+      name: fileToDisplayName(item.path),
+      src: encodePath(item.path),
+      category: item.category,
+      contentElement: item.element,
+      contentKind: item.kind,
+      source: "seed",
+      annotations: [],
+      attrs: {
+        id: `img_${idx + 1}`,
+        type: "1",
+        version: "1.0",
+        note: ""
+      }
+    };
+    return image;
+  });
+
   state.tagDefs = builtInTags.map((tag) => ({ ...tag }));
   state.selectedImageId = state.images[0]?.id || null;
   state.selectedTagId = state.tagDefs[0]?.id || null;
@@ -197,10 +255,6 @@ function saveState() {
   );
 }
 
-function selectedImage() {
-  return state.images.find((img) => img.id === state.selectedImageId) || null;
-}
-
 function renderThumbs() {
   el.thumbList.innerHTML = "";
   state.images.forEach((img) => {
@@ -212,13 +266,14 @@ function renderThumbs() {
       </div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
-      <div class="thumb-meta">${img.category} / ${img.contentElement} / ${img.contentKind}</div>
+      <div class="thumb-meta">id:${img.attrs.id} type:${img.attrs.type} version:${img.attrs.version}</div>
     `;
+
     item.addEventListener("click", () => {
       state.selectedImageId = img.id;
-      state.draftRect = null;
+      state.selectedAnnoId = null;
       state.editingAnnoId = null;
-      clearAnnoForm();
+      state.draftRect = null;
       saveState();
       renderAll();
     });
@@ -230,16 +285,16 @@ function renderThumbs() {
         alert("至少保留一张图片");
         return;
       }
-      const ok = window.confirm(`确定删除图片：${img.name} ？`);
-      if (!ok) {
+      if (!window.confirm(`确定删除图片：${img.name} ?`)) {
         return;
       }
       state.images = state.images.filter((it) => it.id !== img.id);
       if (state.selectedImageId === img.id) {
         state.selectedImageId = state.images[0]?.id || null;
       }
-      state.draftRect = null;
+      state.selectedAnnoId = null;
       state.editingAnnoId = null;
+      state.draftRect = null;
       saveState();
       renderAll();
     });
@@ -258,9 +313,7 @@ function renderMain() {
   }
 
   el.mainImage.src = img.src;
-  el.viewerTitle.textContent = `${img.name} (${img.contentElement}/${img.contentKind})`;
-  el.imageContentElement.value = img.contentElement;
-  el.imageContentKind.value = img.contentKind;
+  el.viewerTitle.textContent = `${img.name} | id:${img.attrs.id} type:${img.attrs.type} version:${img.attrs.version}`;
   renderBoxes();
 }
 
@@ -273,162 +326,230 @@ function renderBoxes() {
 
   img.annotations.forEach((anno) => {
     const box = document.createElement("div");
-    box.className = `box shape-${anno.shape || "rect"}`;
+    box.className = `box shape-${anno.shape}`;
+    if (anno.id === state.selectedAnnoId) {
+      box.classList.add("selected");
+    }
     box.style.left = `${anno.rect.x * 100}%`;
     box.style.top = `${anno.rect.y * 100}%`;
     box.style.width = `${anno.rect.w * 100}%`;
     box.style.height = `${anno.rect.h * 100}%`;
-    box.style.setProperty("--shape-color", hashColor(anno.tagId || anno.tagName || "tag"));
-    box.title = `${anno.tagPath} | ${shapeNameMap[anno.shape] || "方框"}`;
+    box.style.setProperty("--shape-color", anno.color);
+
+    if (anno.shape === "rect") {
+      box.style.borderColor = anno.color;
+      box.style.background = hexToRgba(anno.color, 0.18);
+    } else if (anno.shape === "line") {
+      box.style.background = "none";
+      box.style.borderTop = `3px solid ${anno.color}`;
+    } else {
+      box.style.background = `repeating-linear-gradient(-45deg, ${anno.color} 0 4px, transparent 4px 8px)`;
+    }
+
+    box.title = `${anno.tagPath}${anno.parentAnnoId ? " (从属子框)" : ""}`;
+    box.dataset.annoId = anno.id;
+    box.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.selectedAnnoId = anno.id;
+      state.editingAnnoId = anno.id;
+      state.selectedTagId = anno.tagId;
+      el.annoShapeSelect.value = anno.shape;
+      el.annoColor.value = anno.color;
+      el.annoTranscription.value = anno.transcription || "";
+      el.annoNote.value = anno.note || "";
+      renderAll();
+    });
+
     el.drawLayer.appendChild(box);
   });
 
   if (state.draftRect) {
-    const box = document.createElement("div");
-    box.className = `box temp shape-${el.annoShapeSelect.value}`;
-    box.style.left = `${state.draftRect.x * 100}%`;
-    box.style.top = `${state.draftRect.y * 100}%`;
-    box.style.width = `${state.draftRect.w * 100}%`;
-    box.style.height = `${state.draftRect.h * 100}%`;
-    box.style.setProperty("--shape-color", hashColor(state.selectedTagId || "temp"));
-    el.drawLayer.appendChild(box);
+    const draft = document.createElement("div");
+    draft.className = `box temp shape-${el.annoShapeSelect.value}`;
+    draft.style.left = `${state.draftRect.x * 100}%`;
+    draft.style.top = `${state.draftRect.y * 100}%`;
+    draft.style.width = `${state.draftRect.w * 100}%`;
+    draft.style.height = `${state.draftRect.h * 100}%`;
+    draft.style.setProperty("--shape-color", el.annoColor.value);
+
+    if (el.annoShapeSelect.value === "rect") {
+      draft.style.borderColor = el.annoColor.value;
+      draft.style.background = hexToRgba(el.annoColor.value, 0.18);
+    } else if (el.annoShapeSelect.value === "line") {
+      draft.style.background = "none";
+      draft.style.borderTop = `3px dashed ${el.annoColor.value}`;
+    } else {
+      draft.style.background = `repeating-linear-gradient(-45deg, ${el.annoColor.value} 0 4px, transparent 4px 8px)`;
+    }
+
+    el.drawLayer.appendChild(draft);
   }
 }
 
-function renderAnnoList() {
+function renderCurrentPropsPanel() {
+  const anno = selectedAnno();
   const img = selectedImage();
-  el.annoList.innerHTML = "";
   if (!img) {
     return;
   }
 
-  img.annotations.forEach((anno) => {
-    const item = document.createElement("div");
-    item.className = "anno-item";
-    item.innerHTML = `
-      <div class="anno-item-head">
-        <strong>${anno.tagName}</strong>
-        <span class="muted">${shapeNameMap[anno.shape] || "方框"}</span>
-      </div>
-      <div class="muted">标签路径：${anno.tagPath}</div>
-      <div class="muted">转写：${anno.transcription || "-"}</div>
-      <div class="muted">注释：${anno.note || "-"}</div>
-      <button data-id="${anno.id}">编辑/定位</button>
-      <button data-del="${anno.id}">删除</button>
-    `;
-
-    const editBtn = item.querySelector("button[data-id]");
-    editBtn.addEventListener("click", () => {
-      state.editingAnnoId = anno.id;
-      state.draftRect = { ...anno.rect };
-      state.selectedTagId = anno.tagId;
-      el.annoShapeSelect.value = anno.shape || "rect";
-      el.annoTranscription.value = anno.transcription || "";
-      el.annoNote.value = anno.note || "";
-      el.drawState.textContent = "正在编辑已有标注（可修改后保存）";
-      syncSelectedTagUI();
-      renderAll();
-    });
-
-    const delBtn = item.querySelector("button[data-del]");
-    delBtn.addEventListener("click", () => {
-      img.annotations = img.annotations.filter((a) => a.id !== anno.id);
-      if (state.editingAnnoId === anno.id) {
-        state.editingAnnoId = null;
-      }
-      saveState();
-      renderAll();
-    });
-
-    el.annoList.appendChild(item);
-  });
+  if (anno) {
+    el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})${anno.parentAnnoId ? " / 子框" : ""}`;
+    el.propId.value = anno.attrs.id || "";
+    el.propType.value = anno.attrs.type || "";
+    el.propVersion.value = anno.attrs.version || "";
+    el.propNote.value = anno.attrs.note || anno.note || "";
+  } else {
+    el.currentTargetHint.textContent = "当前：图片";
+    el.propId.value = img.attrs.id || "";
+    el.propType.value = img.attrs.type || "";
+    el.propVersion.value = img.attrs.version || "";
+    el.propNote.value = img.attrs.note || "";
+  }
 }
 
 function renderTagTree() {
-  function renderNode(node, depth) {
-    const attrs = node.attrs?.length ? ` 属性:${node.attrs.join("|")}` : "";
+  function renderNode(tag) {
     const li = document.createElement("li");
-    const spacer = "&nbsp;".repeat(depth * 2);
-    li.innerHTML = `${spacer}<strong>${node.name}</strong><span class="tag-meta">(${shapeNameMap[node.shape] || "方框"}${attrs})</span>`;
-    const children = childrenOf(node.id);
+    const attrs = (tag.attrs || []).join("|");
+    li.innerHTML = `<strong>${tag.name}</strong><span class="tag-meta">${attrs ? ` 属性:${attrs}` : ""}</span>`;
+
+    const children = childrenOf(tag.id);
     if (children.length > 0) {
       const ul = document.createElement("ul");
-      children.forEach((child) => ul.appendChild(renderNode(child, depth + 1)));
+      children.forEach((child) => ul.appendChild(renderNode(child)));
       li.appendChild(ul);
     }
     return li;
   }
 
   el.tagTree.innerHTML = "";
-  const roots = childrenOf(null);
   const rootUl = document.createElement("ul");
-  roots.forEach((root) => rootUl.appendChild(renderNode(root, 0)));
+  childrenOf(null).forEach((root) => rootUl.appendChild(renderNode(root)));
   el.tagTree.appendChild(rootUl);
 }
 
 function buildTagOptionList() {
-  const result = [];
-  function walk(node, depth) {
-    result.push({ id: node.id, label: `${"  ".repeat(depth)}${node.name}` });
-    childrenOf(node.id).forEach((child) => walk(child, depth + 1));
+  const list = [];
+  function walk(tag, depth) {
+    list.push({ id: tag.id, label: `${"  ".repeat(depth)}${tag.name}` });
+    childrenOf(tag.id).forEach((child) => walk(child, depth + 1));
   }
   childrenOf(null).forEach((root) => walk(root, 0));
-  return result;
+  return list;
 }
 
-function renderTagSelectors() {
-  const options = buildTagOptionList();
-  el.annoTagSelect.innerHTML = "";
+function renderNewTagParentOptions() {
+  const opts = buildTagOptionList();
   el.newTagParent.innerHTML = "";
-
-  options.forEach((opt) => {
-    const op1 = document.createElement("option");
-    op1.value = opt.id;
-    op1.textContent = opt.label;
-    el.annoTagSelect.appendChild(op1);
-
-    const op2 = document.createElement("option");
-    op2.value = opt.id;
-    op2.textContent = opt.label;
-    el.newTagParent.appendChild(op2);
+  opts.forEach((opt) => {
+    const o = document.createElement("option");
+    o.value = opt.id;
+    o.textContent = opt.label;
+    el.newTagParent.appendChild(o);
   });
+}
 
-  if (!state.selectedTagId && options[0]) {
-    state.selectedTagId = options[0].id;
+function renderTagPickerTree() {
+  function renderPickerNode(tag) {
+    const li = document.createElement("li");
+    const line = document.createElement("div");
+    line.className = "tree-node-line";
+
+    const name = document.createElement("span");
+    name.textContent = tag.name;
+
+    const btn = document.createElement("button");
+    btn.className = `tree-pick-btn ${state.selectedTagId === tag.id ? "active" : ""}`;
+    btn.textContent = state.selectedTagId === tag.id ? "已选" : "选择";
+    btn.addEventListener("click", () => {
+      state.selectedTagId = tag.id;
+      renderTagPickerTree();
+      renderSelectedTagInfo();
+      saveState();
+    });
+
+    line.appendChild(name);
+    line.appendChild(btn);
+
+    const children = childrenOf(tag.id);
+    if (children.length > 0) {
+      const details = document.createElement("details");
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = tag.name;
+      details.appendChild(summary);
+      details.appendChild(line);
+
+      const ul = document.createElement("ul");
+      children.forEach((child) => ul.appendChild(renderPickerNode(child)));
+      details.appendChild(ul);
+      li.appendChild(details);
+    } else {
+      li.appendChild(line);
+    }
+
+    return li;
   }
 
-  syncSelectedTagUI();
+  el.tagPickerTree.innerHTML = "";
+  const ul = document.createElement("ul");
+  childrenOf(null).forEach((root) => ul.appendChild(renderPickerNode(root)));
+  el.tagPickerTree.appendChild(ul);
 }
 
-function syncSelectedTagUI() {
+function renderSelectedTagInfo() {
   if (!state.selectedTagId) {
+    el.selectedTagInfo.textContent = "未选择标签";
     return;
   }
-  el.annoTagSelect.value = state.selectedTagId;
   const tag = findTag(state.selectedTagId);
-  if (tag) {
-    el.annoShapeSelect.value = tag.shape || "rect";
+  if (!tag) {
+    el.selectedTagInfo.textContent = "未选择标签";
+    return;
   }
+  el.selectedTagInfo.textContent = `已选择标签：${tagPath(tag.id)}`;
 }
 
-function clearAnnoForm() {
-  syncSelectedTagUI();
-  el.annoTranscription.value = "";
-  el.annoNote.value = "";
+function containsRect(outer, inner) {
+  const eps = 0.0001;
+  return (
+    outer.x <= inner.x + eps &&
+    outer.y <= inner.y + eps &&
+    outer.x + outer.w >= inner.x + inner.w - eps &&
+    outer.y + outer.h >= inner.y + inner.h - eps
+  );
+}
+
+function findParentAnnoId(image, rect, currentAnnoId) {
+  const candidates = image.annotations.filter((anno) => anno.id !== currentAnnoId && containsRect(anno.rect, rect));
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  candidates.sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
+  return candidates[0].id;
+}
+
+function renderDrawState() {
   if (state.drawMode) {
+    el.toggleDrawModeBtn.textContent = "退出画框模式";
     el.drawState.textContent = state.draftRect ? "草稿已生成，可保存" : "画框模式已开启：在图片上拖拽";
   } else {
-    el.drawState.textContent = "先选标签，再点击“进入画框模式”";
+    el.toggleDrawModeBtn.textContent = "进入画框模式";
+    el.drawState.textContent = "先选择标签与样式，再点击进入画框模式";
   }
 }
 
 function renderAll() {
   renderThumbs();
-  renderTagTree();
-  renderTagSelectors();
   renderMain();
-  renderAnnoList();
-  clearAnnoForm();
+  renderCurrentPropsPanel();
+  renderTagTree();
+  renderTagPickerTree();
+  renderSelectedTagInfo();
+  renderNewTagParentOptions();
+  renderDrawState();
 }
 
 function initDraw() {
@@ -436,7 +557,7 @@ function initDraw() {
   let start = null;
 
   el.drawLayer.addEventListener("mousedown", (e) => {
-    if (!selectedImage() || !state.drawMode) {
+    if (!state.drawMode || !selectedImage()) {
       return;
     }
     const rect = el.drawLayer.getBoundingClientRect();
@@ -453,84 +574,32 @@ function initDraw() {
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((e.clientX - rect.left) / rect.width);
     const y = clamp01((e.clientY - rect.top) / rect.height);
-    const normalized = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
-    state.draftRect = toShapeRect(normalized, el.annoShapeSelect.value);
-    el.drawState.textContent = "草稿已生成，可保存";
+    const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
+    state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
     renderBoxes();
+    renderDrawState();
   });
 
   window.addEventListener("mouseup", () => {
-    if (!drawing) {
-      return;
-    }
     drawing = false;
     start = null;
+  });
+
+  el.drawLayer.addEventListener("click", () => {
+    if (!state.drawMode) {
+      state.selectedAnnoId = null;
+      state.editingAnnoId = null;
+      renderAll();
+    }
   });
 }
 
 function bindEvents() {
-  el.annoTagSelect.addEventListener("change", () => {
-    state.selectedTagId = el.annoTagSelect.value;
-    syncSelectedTagUI();
-    renderBoxes();
-    saveState();
-  });
-
-  el.annoShapeSelect.addEventListener("change", () => {
-    const tag = findTag(state.selectedTagId);
-    if (tag) {
-      tag.shape = el.annoShapeSelect.value;
-    }
-    renderTagTree();
-    renderBoxes();
-    saveState();
-  });
-
-  el.addTagBtn.addEventListener("click", () => {
-    const name = el.newTagName.value.trim();
-    const parentId = el.newTagParent.value || null;
-    const shape = el.newTagShape.value;
-    const attrs = el.newTagAttrs.value.trim();
-
-    if (!name) {
-      alert("请填写标签名称");
-      return;
-    }
-    const duplicated = state.tagDefs.some((tag) => tag.name === name && tag.parentId === parentId);
-    if (duplicated) {
-      alert("同级下已存在相同标签名称");
-      return;
-    }
-
-    const tag = {
-      id: uid("tag"),
-      name,
-      parentId,
-      shape,
-      attrs: attrs ? attrs.split(",").map((a) => a.trim()).filter(Boolean) : []
-    };
-    state.tagDefs.push(tag);
-    state.selectedTagId = tag.id;
-    el.newTagName.value = "";
-    el.newTagAttrs.value = "";
-    saveState();
-    renderAll();
-  });
-
-  el.toggleDrawModeBtn.addEventListener("click", () => {
-    state.drawMode = !state.drawMode;
-    if (!state.drawMode) {
-      state.draftRect = null;
-    }
-    el.toggleDrawModeBtn.textContent = state.drawMode ? "退出画框模式" : "进入画框模式";
-    renderAll();
-  });
-
   el.uploadBtn.addEventListener("click", () => {
     el.uploadInput.click();
   });
 
-  el.uploadInput.addEventListener("change", async (e) => {
+  el.uploadInput.addEventListener("change", (e) => {
     const file = e.target.files?.[0];
     if (!file) {
       return;
@@ -538,7 +607,7 @@ function bindEvents() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      const newImage = {
+      const img = {
         id: uid("upload"),
         name: file.name,
         src: reader.result,
@@ -546,27 +615,69 @@ function bindEvents() {
         contentElement: "page",
         contentKind: "图片",
         source: "upload",
-        annotations: []
+        annotations: [],
+        attrs: {
+          id: uid("img"),
+          type: "1",
+          version: "1.0",
+          note: ""
+        }
       };
-      state.images.push(newImage);
-      state.selectedImageId = newImage.id;
-      state.draftRect = null;
+
+      state.images.push(img);
+      state.selectedImageId = img.id;
+      state.selectedAnnoId = null;
       state.editingAnnoId = null;
+      state.draftRect = null;
       saveState();
       renderAll();
     };
+
     reader.readAsDataURL(file);
     e.target.value = "";
   });
 
-  el.saveImageMetaBtn.addEventListener("click", () => {
+  el.saveCurrentPropsBtn.addEventListener("click", () => {
     const img = selectedImage();
     if (!img) {
       return;
     }
-    img.contentElement = el.imageContentElement.value;
-    img.contentKind = el.imageContentKind.value;
+
+    const anno = selectedAnno();
+    if (anno) {
+      anno.attrs.id = el.propId.value.trim() || anno.attrs.id;
+      anno.attrs.type = el.propType.value.trim() || anno.attrs.type;
+      anno.attrs.version = el.propVersion.value.trim() || anno.attrs.version;
+      anno.attrs.note = el.propNote.value.trim();
+      anno.note = anno.attrs.note;
+      el.annoNote.value = anno.note;
+    } else {
+      img.attrs.id = el.propId.value.trim() || img.attrs.id;
+      img.attrs.type = el.propType.value.trim() || img.attrs.type;
+      img.attrs.version = el.propVersion.value.trim() || img.attrs.version;
+      img.attrs.note = el.propNote.value.trim();
+    }
+
     saveState();
+    renderAll();
+  });
+
+  el.toggleDrawModeBtn.addEventListener("click", () => {
+    state.drawMode = !state.drawMode;
+    state.draftRect = null;
+    state.selectedAnnoId = null;
+    if (!state.drawMode) {
+      state.editingAnnoId = null;
+    }
+    renderAll();
+  });
+
+  el.clearDraftBtn.addEventListener("click", () => {
+    state.draftRect = null;
+    state.editingAnnoId = null;
+    state.selectedAnnoId = null;
+    el.annoTranscription.value = "";
+    el.annoNote.value = "";
     renderAll();
   });
 
@@ -575,48 +686,91 @@ function bindEvents() {
     if (!img) {
       return;
     }
-    if (!state.draftRect || state.draftRect.w < 0.005 || state.draftRect.h < 0.005) {
-      alert("请先在中间图片中画出有效框选区域");
+    if (!state.selectedTagId) {
+      alert("请先选择标签");
+      return;
+    }
+    if (!state.draftRect || state.draftRect.w < 0.004 || state.draftRect.h < 0.004) {
+      alert("请先在图片中画出有效区域");
       return;
     }
 
     const tag = findTag(state.selectedTagId);
     if (!tag) {
-      alert("请先选择一个标签");
+      alert("标签不存在，请重新选择");
       return;
     }
 
+    const annoId = state.editingAnnoId || uid("anno");
+    const parentAnnoId = findParentAnnoId(img, state.draftRect, annoId);
+    const old = img.annotations.find((item) => item.id === annoId);
+
     const payload = {
-      id: state.editingAnnoId || uid("anno"),
+      id: annoId,
       tagId: tag.id,
       tagName: tag.name,
       tagPath: tagPath(tag.id),
       shape: el.annoShapeSelect.value,
+      color: el.annoColor.value,
       transcription: el.annoTranscription.value.trim(),
       note: el.annoNote.value.trim(),
-      rect: { ...state.draftRect }
+      rect: { ...state.draftRect },
+      parentAnnoId,
+      attrs: old?.attrs || {
+        id: uid("box"),
+        type: "1",
+        version: "1.0",
+        note: el.annoNote.value.trim()
+      }
     };
 
-    const idx = img.annotations.findIndex((a) => a.id === payload.id);
+    ensureAnnoAttrs(payload);
+    payload.attrs.note = payload.note;
+
+    const idx = img.annotations.findIndex((item) => item.id === payload.id);
     if (idx >= 0) {
       img.annotations[idx] = payload;
     } else {
       img.annotations.push(payload);
     }
 
-    state.draftRect = null;
+    state.selectedAnnoId = payload.id;
     state.editingAnnoId = null;
+    state.draftRect = null;
     state.drawMode = false;
-    el.toggleDrawModeBtn.textContent = "进入画框模式";
     saveState();
     renderAll();
   });
 
-  el.clearDraftBtn.addEventListener("click", () => {
-    state.draftRect = null;
-    state.editingAnnoId = null;
-    clearAnnoForm();
-    renderBoxes();
+  el.addTagBtn.addEventListener("click", () => {
+    const name = el.newTagName.value.trim();
+    const parentId = el.newTagParent.value || null;
+    const attrsRaw = el.newTagAttrs.value.trim();
+
+    if (!name) {
+      alert("请填写标签名称");
+      return;
+    }
+
+    const duplicated = state.tagDefs.some((tag) => tag.parentId === parentId && tag.name === name);
+    if (duplicated) {
+      alert("同级下标签名重复");
+      return;
+    }
+
+    const tag = {
+      id: uid("tag"),
+      name,
+      parentId,
+      attrs: attrsRaw ? attrsRaw.split(",").map((s) => s.trim()).filter(Boolean) : []
+    };
+
+    state.tagDefs.push(tag);
+    state.selectedTagId = tag.id;
+    el.newTagName.value = "";
+    el.newTagAttrs.value = "";
+    saveState();
+    renderAll();
   });
 }
 
