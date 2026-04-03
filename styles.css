@@ -317,14 +317,18 @@ body {
 
 .color-inline-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto;
   gap: 8px;
   align-items: center;
   margin-top: 4px;
 }
 
-.color-inline-row input {
-  margin-top: 0;
+.hidden-color-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
 }
 
 .color-preview-btn {

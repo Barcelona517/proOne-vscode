@@ -727,66 +727,41 @@ function renderImageTagTree() {
     return;
   }
 
-  const parentMap = getParentMap(img);
-  const childMap = new Map();
-  function pushChild(parentId, anno) {
-    const key = parentId || "ROOT";
-    if (!childMap.has(key)) childMap.set(key, []);
-    childMap.get(key).push(anno);
-  }
-
+  const tagMap = new Map();
   img.annotations.forEach((anno) => {
-    const parentId = parentMap.get(anno.id);
-    const parentExists = parentId && findAnnoById(img, parentId);
-    pushChild(parentExists ? parentId : null, anno);
+    if (!tagMap.has(anno.tagName)) {
+      tagMap.set(anno.tagName, { tagName: anno.tagName, count: 0, sampleAnnoId: anno.id });
+    }
+    tagMap.get(anno.tagName).count += 1;
   });
 
-  function sortNodes(list) {
-    list.sort((a, b) => {
-      const depthDiff = templateDepth(a.tagId) - templateDepth(b.tagId);
-      if (depthDiff !== 0) return depthDiff;
-      return a.tagName.localeCompare(b.tagName, "zh-CN");
-    });
-    return list;
-  }
-
-  function renderNode(anno) {
+  const tagItems = [...tagMap.values()].sort((a, b) => a.tagName.localeCompare(b.tagName, "zh-CN"));
+  const ul = document.createElement("ul");
+  tagItems.forEach((item) => {
     const li = document.createElement("li");
     const line = document.createElement("div");
     line.className = "tree-node-line clickable";
     const label = document.createElement("span");
-    const mark = anno.attrs.id ? `#${anno.attrs.id}` : "";
-    label.textContent = `${anno.tagName}${mark}`;
+    label.textContent = `${item.tagName} (${item.count})`;
     line.addEventListener("click", () => {
-      state.selectedAnnoId = anno.id;
-      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
+      state.selectedAnnoId = item.sampleAnnoId;
+      state.selectedTagFilterName = state.selectedTagFilterName === item.tagName ? "" : item.tagName;
       renderAll();
     });
     const btn = document.createElement("button");
-    btn.className = `tree-pick-btn ${state.selectedTagFilterName === anno.tagName ? "active" : ""}`;
-    btn.textContent = state.selectedTagFilterName === anno.tagName ? "已高亮" : "高亮";
+    btn.className = `tree-pick-btn ${state.selectedTagFilterName === item.tagName ? "active" : ""}`;
+    btn.textContent = state.selectedTagFilterName === item.tagName ? "已高亮" : "高亮";
     btn.addEventListener("click", (evt) => {
       evt.stopPropagation();
-      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
-      state.selectedAnnoId = anno.id;
+      state.selectedTagFilterName = state.selectedTagFilterName === item.tagName ? "" : item.tagName;
+      state.selectedAnnoId = item.sampleAnnoId;
       renderAll();
     });
     line.appendChild(label);
     line.appendChild(btn);
     li.appendChild(line);
-
-    const children = sortNodes([...(childMap.get(anno.id) || [])]);
-    if (children.length > 0) {
-      const ul = document.createElement("ul");
-      children.forEach((child) => ul.appendChild(renderNode(child)));
-      li.appendChild(ul);
-    }
-    return li;
-  }
-
-  const ul = document.createElement("ul");
-  const roots = sortNodes([...(childMap.get("ROOT") || [])]);
-  roots.forEach((rootAnno) => ul.appendChild(renderNode(rootAnno)));
+    ul.appendChild(li);
+  });
 
   const clearLi = document.createElement("li");
   const clearBtn = document.createElement("button");
