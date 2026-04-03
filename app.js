@@ -84,6 +84,7 @@ const el = {
   annoShapeSelect: document.getElementById("annoShapeSelect"),
   annoColor: document.getElementById("annoColor"),
   annoColorPreview: document.getElementById("annoColorPreview"),
+  annoColorHint: document.getElementById("annoColorHint"),
   tagPickerTree: document.getElementById("tagPickerTree"),
   selectedTagInfo: document.getElementById("selectedTagInfo"),
   draftTagName: document.getElementById("draftTagName"),
@@ -243,10 +244,7 @@ function findAnnoById(img, annoId) {
 }
 
 function getTagStyle(tag) {
-  if (!tag.style) {
-    tag.style = { shape: "rect", color: "#2e6f86" };
-  }
-  return tag.style;
+  return tag.style || null;
 }
 
 function syncStyleToTag(tagId, shape, color) {
@@ -266,20 +264,30 @@ function syncStyleToTag(tagId, shape, color) {
 function syncPickerFromActiveTag() {
   const tag = findTemplateTag(state.activeDraftTagId);
   if (!tag) {
-    renderColorPreview();
+    renderColorPreview(null);
     return;
   }
   const style = getTagStyle(tag);
+  if (!style) {
+    renderColorPreview(null);
+    return;
+  }
   el.annoShapeSelect.value = style.shape;
   el.annoColor.value = style.color;
-  renderColorPreview();
+  renderColorPreview(style.color);
 }
 
-function renderColorPreview() {
+function renderColorPreview(colorValue) {
   if (!el.annoColorPreview) return;
-  const val = (el.annoColor.value || "#2e6f86").toLowerCase();
-  el.annoColorPreview.textContent = val;
+  el.annoColorPreview.textContent = "改变颜色";
+  if (!colorValue) {
+    el.annoColorPreview.style.background = "#9b9488";
+    if (el.annoColorHint) el.annoColorHint.textContent = "请选择颜色";
+    return;
+  }
+  const val = colorValue.toLowerCase();
   el.annoColorPreview.style.background = val;
+  if (el.annoColorHint) el.annoColorHint.textContent = `当前颜色: ${val}`;
 }
 
 function getParentMap(img) {
@@ -719,41 +727,66 @@ function renderImageTagTree() {
     return;
   }
 
-  const tagMap = new Map();
+  const parentMap = getParentMap(img);
+  const childMap = new Map();
+  function pushChild(parentId, anno) {
+    const key = parentId || "ROOT";
+    if (!childMap.has(key)) childMap.set(key, []);
+    childMap.get(key).push(anno);
+  }
+
   img.annotations.forEach((anno) => {
-    if (!tagMap.has(anno.tagName)) {
-      tagMap.set(anno.tagName, { tagName: anno.tagName, count: 0, sampleAnnoId: anno.id });
-    }
-    tagMap.get(anno.tagName).count += 1;
+    const parentId = parentMap.get(anno.id);
+    const parentExists = parentId && findAnnoById(img, parentId);
+    pushChild(parentExists ? parentId : null, anno);
   });
 
-  const tagItems = [...tagMap.values()].sort((a, b) => a.tagName.localeCompare(b.tagName, "zh-CN"));
-  const ul = document.createElement("ul");
-  tagItems.forEach((item) => {
+  function sortNodes(list) {
+    list.sort((a, b) => {
+      const depthDiff = templateDepth(a.tagId) - templateDepth(b.tagId);
+      if (depthDiff !== 0) return depthDiff;
+      return a.tagName.localeCompare(b.tagName, "zh-CN");
+    });
+    return list;
+  }
+
+  function renderNode(anno) {
     const li = document.createElement("li");
     const line = document.createElement("div");
     line.className = "tree-node-line clickable";
     const label = document.createElement("span");
-    label.textContent = `${item.tagName} (${item.count})`;
+    const mark = anno.attrs.id ? `#${anno.attrs.id}` : "";
+    label.textContent = `${anno.tagName}${mark}`;
     line.addEventListener("click", () => {
-      state.selectedAnnoId = item.sampleAnnoId;
-      state.selectedTagFilterName = state.selectedTagFilterName === item.tagName ? "" : item.tagName;
+      state.selectedAnnoId = anno.id;
+      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
       renderAll();
     });
     const btn = document.createElement("button");
-    btn.className = `tree-pick-btn ${state.selectedTagFilterName === item.tagName ? "active" : ""}`;
-    btn.textContent = state.selectedTagFilterName === item.tagName ? "已高亮" : "高亮";
+    btn.className = `tree-pick-btn ${state.selectedTagFilterName === anno.tagName ? "active" : ""}`;
+    btn.textContent = state.selectedTagFilterName === anno.tagName ? "已高亮" : "高亮";
     btn.addEventListener("click", (evt) => {
       evt.stopPropagation();
-      state.selectedTagFilterName = state.selectedTagFilterName === item.tagName ? "" : item.tagName;
-      state.selectedAnnoId = item.sampleAnnoId;
+      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
+      state.selectedAnnoId = anno.id;
       renderAll();
     });
     line.appendChild(label);
     line.appendChild(btn);
     li.appendChild(line);
-    ul.appendChild(li);
-  });
+
+    const children = sortNodes([...(childMap.get(anno.id) || [])]);
+    if (children.length > 0) {
+      const ul = document.createElement("ul");
+      children.forEach((child) => ul.appendChild(renderNode(child)));
+      li.appendChild(ul);
+    }
+    return li;
+  }
+
+  const ul = document.createElement("ul");
+  const roots = sortNodes([...(childMap.get("ROOT") || [])]);
+  roots.forEach((rootAnno) => ul.appendChild(renderNode(rootAnno)));
 
   const clearLi = document.createElement("li");
   const clearBtn = document.createElement("button");
@@ -875,7 +908,8 @@ function bindDrawEvents() {
     if (drawing && start && state.draftRect) {
       const tag = findTemplateTag(state.activeDraftTagId);
       if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
-        const style = getTagStyle(tag);
+        const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
+        if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
         state.pendingDrafts.push({
           rect: { ...state.draftRect },
           tagId: tag.id,
@@ -981,11 +1015,15 @@ function bindEvents() {
   });
 
   el.annoColor.addEventListener("input", () => {
-    renderColorPreview();
+    renderColorPreview(el.annoColor.value);
     if (!state.activeDraftTagId) return;
     syncStyleToTag(state.activeDraftTagId, el.annoShapeSelect.value, el.annoColor.value);
     renderBoxes();
     saveState();
+  });
+
+  el.annoColorPreview.addEventListener("click", () => {
+    el.annoColor.click();
   });
 
   el.annoShapeSelect.addEventListener("change", () => {
