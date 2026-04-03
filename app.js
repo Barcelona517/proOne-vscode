@@ -62,6 +62,7 @@ const state = {
   drawMode: false,
   drawingActive: false,
   draftRect: null,
+  pendingDrafts: [],
   activeDraftTagId: null,
   propInputs: {},
   draggingThumbId: null
@@ -536,6 +537,27 @@ function renderBoxes() {
     }
     el.drawLayer.appendChild(draft);
   }
+
+  state.pendingDrafts.forEach((draftItem) => {
+    const draft = document.createElement("div");
+    draft.className = `box temp shape-${draftItem.shape}`;
+    draft.style.left = `${draftItem.rect.x * 100}%`;
+    draft.style.top = `${draftItem.rect.y * 100}%`;
+    draft.style.width = `${draftItem.rect.w * 100}%`;
+    draft.style.height = `${draftItem.rect.h * 100}%`;
+    draft.style.setProperty("--shape-color", draftItem.color);
+    if (draftItem.shape === "rect") {
+      draft.style.borderColor = draftItem.color;
+      draft.style.background = hexToRgba(draftItem.color, 0.18);
+    } else if (draftItem.shape === "line") {
+      draft.style.background = "none";
+      draft.style.borderTop = `3px dashed ${draftItem.color}`;
+    } else {
+      draft.style.background = `repeating-linear-gradient(-45deg, ${draftItem.color} 0 4px, transparent 4px 8px)`;
+    }
+    draft.title = `待保存: ${draftItem.tagPath}`;
+    el.drawLayer.appendChild(draft);
+  });
 }
 
 function renderPropsEditor() {
@@ -591,10 +613,16 @@ function renderEditMode() {
     return;
   }
   if (state.drawingActive) {
-    el.drawState.textContent = state.draftRect ? "草稿已生成，可保存" : "请在图片上拖拽画框";
+    const count = state.pendingDrafts.length;
+    if (state.draftRect) {
+      el.drawState.textContent = `当前拖拽中，待保存 ${count} 个框`;
+    } else {
+      el.drawState.textContent = `可连续画框，待保存 ${count} 个框`;
+    }
     el.startDrawBtn.textContent = "取消添加";
   } else {
-    el.drawState.textContent = "点击添加框开始本次画框";
+    const count = state.pendingDrafts.length;
+    el.drawState.textContent = count > 0 ? `待保存 ${count} 个框，点击保存标注统一保存` : "点击添加框开始本次画框";
     el.startDrawBtn.textContent = "添加框";
   }
 }
@@ -865,6 +893,23 @@ function bindDrawEvents() {
   });
 
   window.addEventListener("mouseup", () => {
+    if (drawing && start && state.draftRect) {
+      const tag = findTemplateTag(state.activeDraftTagId);
+      if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
+        const style = getTagStyle(tag);
+        state.pendingDrafts.push({
+          rect: { ...state.draftRect },
+          tagId: tag.id,
+          tagName: tag.name,
+          tagPath: templatePath(tag.id),
+          shape: style.shape,
+          color: style.color
+        });
+      }
+      state.draftRect = null;
+      renderBoxes();
+      renderEditMode();
+    }
     drawing = false;
     start = null;
   });
@@ -935,6 +980,7 @@ function bindEvents() {
 
   el.clearDraftBtn.addEventListener("click", () => {
     state.draftRect = null;
+    state.pendingDrafts = [];
     state.drawingActive = false;
     el.annoTranscription.value = "";
     el.annoNote.value = "";
@@ -978,35 +1024,33 @@ function bindEvents() {
   el.saveAnnoBtn.addEventListener("click", () => {
     const img = selectedImage();
     if (!img) return;
-    if (!state.activeDraftTagId) { alert("请先选择标签"); return; }
-    if (!state.draftRect || state.draftRect.w < 0.003 || state.draftRect.h < 0.003) { alert("请先拖拽出有效框选区域"); return; }
+    if (state.pendingDrafts.length === 0) { alert("请先画至少一个框"); return; }
 
-    const tag = findTemplateTag(state.activeDraftTagId);
-    if (!tag) { alert("标签不存在"); return; }
-    const style = getTagStyle(tag);
+    let lastAnnoId = null;
+    state.pendingDrafts.forEach((draftItem) => {
+      const attrs = {};
+      setIfNotEmpty(attrs, "note", el.annoNote.value);
+      const anno = {
+        id: uid("anno"),
+        tagId: draftItem.tagId,
+        tagName: draftItem.tagName,
+        tagPath: draftItem.tagPath,
+        shape: draftItem.shape,
+        color: draftItem.color,
+        transcription: el.annoTranscription.value.trim(),
+        note: el.annoNote.value.trim(),
+        rect: { ...draftItem.rect },
+        attrs,
+        parentAnnoId: null
+      };
+      const idValue = (anno.attrs.id || "").trim();
+      anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
+      img.annotations.push(anno);
+      lastAnnoId = anno.id;
+    });
 
-    const attrs = {};
-    setIfNotEmpty(attrs, "note", el.annoNote.value);
-
-    const anno = {
-      id: uid("anno"),
-      tagId: tag.id,
-      tagName: tag.name,
-      tagPath: templatePath(tag.id),
-      shape: style.shape,
-      color: style.color,
-      transcription: el.annoTranscription.value.trim(),
-      note: el.annoNote.value.trim(),
-      rect: { ...state.draftRect },
-      attrs,
-      parentAnnoId: null
-    };
-
-    const idValue = (anno.attrs.id || "").trim();
-    anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
-
-    img.annotations.push(anno);
-    state.selectedAnnoId = anno.id;
+    state.selectedAnnoId = lastAnnoId;
+    state.pendingDrafts = [];
     state.draftRect = null;
     state.drawingActive = false;
     el.annoTranscription.value = "";
