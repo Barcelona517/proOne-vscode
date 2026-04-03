@@ -730,14 +730,59 @@ function renderImageTagTree() {
   const tagMap = new Map();
   img.annotations.forEach((anno) => {
     if (!tagMap.has(anno.tagName)) {
-      tagMap.set(anno.tagName, { tagName: anno.tagName, count: 0, sampleAnnoId: anno.id });
+      tagMap.set(anno.tagName, { tagName: anno.tagName, count: 0, sampleAnnoId: anno.id, parentTagName: null, depth: 0 });
     }
     tagMap.get(anno.tagName).count += 1;
   });
 
-  const tagItems = [...tagMap.values()].sort((a, b) => a.tagName.localeCompare(b.tagName, "zh-CN"));
-  const ul = document.createElement("ul");
-  tagItems.forEach((item) => {
+  tagMap.forEach((item) => {
+    const tagDef = state.templateTags.find((t) => t.name === item.tagName) || null;
+    if (!tagDef || !tagDef.parentId) return;
+    const parentTag = findTemplateTag(tagDef.parentId);
+    if (!parentTag) return;
+    if (tagMap.has(parentTag.name)) {
+      item.parentTagName = parentTag.name;
+    }
+  });
+
+  function computeDepth(item) {
+    let d = 0;
+    let cursor = item;
+    const guard = new Set();
+    while (cursor && cursor.parentTagName && !guard.has(cursor.parentTagName)) {
+      guard.add(cursor.parentTagName);
+      const parent = tagMap.get(cursor.parentTagName);
+      if (!parent) break;
+      d += 1;
+      cursor = parent;
+    }
+    return d;
+  }
+
+  tagMap.forEach((item) => {
+    item.depth = computeDepth(item);
+  });
+
+  const childMap = new Map();
+  function pushChild(parentName, item) {
+    const key = parentName || "ROOT";
+    if (!childMap.has(key)) childMap.set(key, []);
+    childMap.get(key).push(item);
+  }
+
+  tagMap.forEach((item) => {
+    pushChild(item.parentTagName, item);
+  });
+
+  function sortItems(list) {
+    list.sort((a, b) => {
+      if (a.depth !== b.depth) return a.depth - b.depth;
+      return a.tagName.localeCompare(b.tagName, "zh-CN");
+    });
+    return list;
+  }
+
+  function renderNode(item) {
     const li = document.createElement("li");
     const line = document.createElement("div");
     line.className = "tree-node-line clickable";
@@ -760,8 +805,19 @@ function renderImageTagTree() {
     line.appendChild(label);
     line.appendChild(btn);
     li.appendChild(line);
-    ul.appendChild(li);
-  });
+
+    const children = sortItems([...(childMap.get(item.tagName) || [])]);
+    if (children.length > 0) {
+      const ul = document.createElement("ul");
+      children.forEach((child) => ul.appendChild(renderNode(child)));
+      li.appendChild(ul);
+    }
+    return li;
+  }
+
+  const ul = document.createElement("ul");
+  const roots = sortItems([...(childMap.get("ROOT") || [])]);
+  roots.forEach((root) => ul.appendChild(renderNode(root)));
 
   const clearLi = document.createElement("li");
   const clearBtn = document.createElement("button");
