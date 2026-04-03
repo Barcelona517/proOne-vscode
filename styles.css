@@ -75,6 +75,12 @@ body {
   margin-bottom: 10px;
 }
 
+.panel-title.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .thumb-list {
   display: flex;
   flex-direction: column;
@@ -100,8 +106,22 @@ body {
 
 .thumb-head {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 4px;
+}
+
+.thumb-select {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.thumb-select input {
+  width: auto;
+  margin: 0;
 }
 
 .thumb-delete-btn {

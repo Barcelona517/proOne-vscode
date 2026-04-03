@@ -59,13 +59,13 @@ const state = {
   selectedTemplateTagId: null,
   selectedTagFilterName: "",
   showTemplateTree: false,
-  drawMode: false,
   drawingActive: false,
   draftRect: null,
   pendingDrafts: [],
   activeDraftTagId: null,
   propInputs: {},
-  draggingThumbId: null
+  draggingThumbId: null,
+  batchDeleteImageIds: []
 };
 
 const el = {
@@ -77,7 +77,6 @@ const el = {
   propsEditor: document.getElementById("propsEditor"),
   propNote: document.getElementById("propNote"),
   saveCurrentPropsBtn: document.getElementById("saveCurrentPropsBtn"),
-  enterEditModeBtn: document.getElementById("enterEditModeBtn"),
   editModeArea: document.getElementById("editModeArea"),
   drawState: document.getElementById("drawState"),
   startDrawBtn: document.getElementById("startDrawBtn"),
@@ -107,6 +106,7 @@ const el = {
   addAttrBtn: document.getElementById("addAttrBtn"),
   templateAttrSelect: document.getElementById("templateAttrSelect"),
   deleteAttrBtn: document.getElementById("deleteAttrBtn"),
+  deleteSelectedImagesBtn: document.getElementById("deleteSelectedImagesBtn"),
   uploadInput: document.getElementById("uploadInput"),
   uploadBtn: document.getElementById("uploadBtn")
 };
@@ -365,13 +365,17 @@ function loadState() {
 
 function renderThumbs() {
   el.thumbList.innerHTML = "";
+  const selectedForDelete = new Set(state.batchDeleteImageIds);
   state.images.forEach((img) => {
     const card = document.createElement("div");
     card.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""}`;
     card.draggable = true;
     card.dataset.imageId = img.id;
     card.innerHTML = `
-      <div class="thumb-head"><button class="thumb-delete-btn" data-id="${img.id}">删除</button></div>
+      <div class="thumb-head">
+        <label class="thumb-select"><input type="checkbox" data-select-id="${img.id}" ${selectedForDelete.has(img.id) ? "checked" : ""} />选中</label>
+        <button class="thumb-delete-btn" data-id="${img.id}">删除</button>
+      </div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
       <div class="thumb-meta">id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}</div>
@@ -421,10 +425,21 @@ function renderThumbs() {
       state.selectedImageId = img.id;
       state.selectedAnnoId = null;
       state.selectedTagFilterName = "";
-      state.drawMode = false;
       state.drawingActive = false;
       state.draftRect = null;
       renderAll();
+    });
+
+    const selectCheckbox = card.querySelector(`input[data-select-id="${img.id}"]`);
+    selectCheckbox.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+    });
+    selectCheckbox.addEventListener("change", () => {
+      if (selectCheckbox.checked) {
+        if (!state.batchDeleteImageIds.includes(img.id)) state.batchDeleteImageIds.push(img.id);
+      } else {
+        state.batchDeleteImageIds = state.batchDeleteImageIds.filter((id) => id !== img.id);
+      }
     });
 
     card.querySelector("button[data-id]").addEventListener("click", (evt) => {
@@ -435,6 +450,7 @@ function renderThumbs() {
       }
       if (!window.confirm(`确定删除图片：${img.name}?`)) return;
       state.images = state.images.filter((it) => it.id !== img.id);
+      state.batchDeleteImageIds = state.batchDeleteImageIds.filter((id) => id !== img.id);
       if (state.selectedImageId === img.id) state.selectedImageId = state.images[0]?.id || null;
       state.selectedAnnoId = null;
       state.selectedTagFilterName = "";
@@ -600,18 +616,6 @@ function renderPropsEditor() {
 }
 
 function renderEditMode() {
-  if (state.drawMode) {
-    el.enterEditModeBtn.textContent = "退出编辑模式";
-    el.editModeArea.classList.add("active");
-  } else {
-    el.enterEditModeBtn.textContent = "进入编辑模式";
-    el.editModeArea.classList.remove("active");
-  }
-
-  if (!state.drawMode) {
-    el.drawState.textContent = "当前未处于编辑模式";
-    return;
-  }
   if (state.drawingActive) {
     const count = state.pendingDrafts.length;
     if (state.draftRect) {
@@ -622,8 +626,8 @@ function renderEditMode() {
     el.startDrawBtn.textContent = "取消添加";
   } else {
     const count = state.pendingDrafts.length;
-    el.drawState.textContent = count > 0 ? `待保存 ${count} 个框，点击保存标注统一保存` : "点击添加框开始本次画框";
-    el.startDrawBtn.textContent = "添加框";
+    el.drawState.textContent = count > 0 ? `待保存 ${count} 个框，点击保存标注统一保存` : "先选择标签和画框样式，再点击“开始添加”按钮";
+    el.startDrawBtn.textContent = "开始添加";
   }
 }
 
@@ -715,66 +719,41 @@ function renderImageTagTree() {
     return;
   }
 
-  const parentMap = getParentMap(img);
-  const childMap = new Map();
-  function pushChild(parentId, anno) {
-    const key = parentId || "ROOT";
-    if (!childMap.has(key)) childMap.set(key, []);
-    childMap.get(key).push(anno);
-  }
-
+  const tagMap = new Map();
   img.annotations.forEach((anno) => {
-    const parentId = parentMap.get(anno.id);
-    const parentExists = parentId && findAnnoById(img, parentId);
-    pushChild(parentExists ? parentId : null, anno);
+    if (!tagMap.has(anno.tagName)) {
+      tagMap.set(anno.tagName, { tagName: anno.tagName, count: 0, sampleAnnoId: anno.id });
+    }
+    tagMap.get(anno.tagName).count += 1;
   });
 
-  function sortNodes(list) {
-    list.sort((a, b) => {
-      const depthDiff = templateDepth(a.tagId) - templateDepth(b.tagId);
-      if (depthDiff !== 0) return depthDiff;
-      return a.tagName.localeCompare(b.tagName, "zh-CN");
-    });
-    return list;
-  }
-
-  function renderNode(anno) {
+  const tagItems = [...tagMap.values()].sort((a, b) => a.tagName.localeCompare(b.tagName, "zh-CN"));
+  const ul = document.createElement("ul");
+  tagItems.forEach((item) => {
     const li = document.createElement("li");
     const line = document.createElement("div");
     line.className = "tree-node-line clickable";
     const label = document.createElement("span");
-    const mark = anno.attrs.id ? `#${anno.attrs.id}` : "";
-    label.textContent = `${anno.tagName}${mark}`;
+    label.textContent = `${item.tagName} (${item.count})`;
     line.addEventListener("click", () => {
-      state.selectedAnnoId = anno.id;
-      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
+      state.selectedAnnoId = item.sampleAnnoId;
+      state.selectedTagFilterName = state.selectedTagFilterName === item.tagName ? "" : item.tagName;
       renderAll();
     });
     const btn = document.createElement("button");
-    btn.className = `tree-pick-btn ${state.selectedTagFilterName === anno.tagName ? "active" : ""}`;
-    btn.textContent = state.selectedTagFilterName === anno.tagName ? "已高亮" : "高亮";
+    btn.className = `tree-pick-btn ${state.selectedTagFilterName === item.tagName ? "active" : ""}`;
+    btn.textContent = state.selectedTagFilterName === item.tagName ? "已高亮" : "高亮";
     btn.addEventListener("click", (evt) => {
       evt.stopPropagation();
-      state.selectedTagFilterName = state.selectedTagFilterName === anno.tagName ? "" : anno.tagName;
-      state.selectedAnnoId = anno.id;
+      state.selectedTagFilterName = state.selectedTagFilterName === item.tagName ? "" : item.tagName;
+      state.selectedAnnoId = item.sampleAnnoId;
       renderAll();
     });
     line.appendChild(label);
     line.appendChild(btn);
     li.appendChild(line);
-
-    const children = sortNodes([...(childMap.get(anno.id) || [])]);
-    if (children.length > 0) {
-      const ul = document.createElement("ul");
-      children.forEach((child) => ul.appendChild(renderNode(child)));
-      li.appendChild(ul);
-    }
-    return li;
-  }
-
-  const ul = document.createElement("ul");
-  const roots = sortNodes([...(childMap.get("ROOT") || [])]);
-  roots.forEach((rootAnno) => ul.appendChild(renderNode(rootAnno)));
+    ul.appendChild(li);
+  });
 
   const clearLi = document.createElement("li");
   const clearBtn = document.createElement("button");
@@ -872,7 +851,7 @@ function bindDrawEvents() {
   let start = null;
 
   el.drawLayer.addEventListener("mousedown", (evt) => {
-    if (!state.drawMode || !state.drawingActive || !selectedImage()) return;
+    if (!state.drawingActive || !selectedImage()) return;
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((evt.clientX - rect.left) / rect.width);
     const y = clamp01((evt.clientY - rect.top) / rect.height);
@@ -963,19 +942,33 @@ function bindEvents() {
     saveState();
   });
 
-  el.enterEditModeBtn.addEventListener("click", () => {
-    state.drawMode = !state.drawMode;
-    state.drawingActive = false;
-    state.draftRect = null;
-    if (!state.drawMode) state.selectedAnnoId = null;
-    renderAll();
-  });
-
   el.startDrawBtn.addEventListener("click", () => {
-    if (!state.drawMode) return;
     state.drawingActive = !state.drawingActive;
     state.draftRect = null;
     renderAll();
+  });
+
+  el.deleteSelectedImagesBtn.addEventListener("click", () => {
+    const selectedIds = new Set(state.batchDeleteImageIds);
+    if (selectedIds.size === 0) {
+      alert("请先勾选要删除的图片");
+      return;
+    }
+    const remaining = state.images.filter((img) => !selectedIds.has(img.id));
+    if (remaining.length === 0) {
+      alert("至少保留一张图片");
+      return;
+    }
+    if (!window.confirm(`确定批量删除 ${selectedIds.size} 张图片吗？`)) return;
+    state.images = remaining;
+    state.batchDeleteImageIds = [];
+    if (!state.images.some((img) => img.id === state.selectedImageId)) {
+      state.selectedImageId = state.images[0]?.id || null;
+      state.selectedAnnoId = null;
+      state.selectedTagFilterName = "";
+    }
+    renderAll();
+    saveState();
   });
 
   el.clearDraftBtn.addEventListener("click", () => {

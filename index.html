@@ -18,14 +18,16 @@
 
     <main class="layout">
       <aside class="left-panel">
-        <div class="panel-title">概览</div>
+        <div class="panel-title with-action">
+          <span>概览</span>
+          <button id="deleteSelectedImagesBtn" class="mini-btn" type="button">批量删除</button>
+        </div>
         <div id="thumbList" class="thumb-list"></div>
       </aside>
 
       <section class="center-panel">
         <div class="viewer-head">
           <div id="viewerTitle">未选择图片</div>
-          <div class="hint">先在右侧选择标签和画框样式，再进入画框模式</div>
         </div>
         <div id="canvasWrap" class="canvas-wrap">
           <img id="mainImage" alt="主编辑图" draggable="false" />
@@ -48,13 +50,10 @@
 
         <div class="section">
           <div class="section-title">2. 画框模式</div>
-          <div class="row-actions one-col single-bottom-gap">
-            <button id="enterEditModeBtn" class="primary">进入编辑模式</button>
-          </div>
-          <div id="editModeArea" class="hidden-block">
+          <div id="editModeArea">
             <div id="drawState" class="muted">编辑模式已开启</div>
             <div class="row-actions single-bottom-gap">
-              <button id="startDrawBtn" class="primary">添加框</button>
+              <button id="startDrawBtn" class="primary">开始添加</button>
               <button id="clearDraftBtn">清空草稿</button>
             </div>
             <label>样式形状
