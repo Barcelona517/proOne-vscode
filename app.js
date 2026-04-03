@@ -63,8 +63,7 @@ const state = {
   drawingActive: false,
   draftRect: null,
   activeDraftTagId: null,
-  propInputs: {},
-  boxInteraction: null
+  propInputs: {}
 };
 
 const el = {
@@ -83,6 +82,7 @@ const el = {
   clearDraftBtn: document.getElementById("clearDraftBtn"),
   annoShapeSelect: document.getElementById("annoShapeSelect"),
   annoColor: document.getElementById("annoColor"),
+  annoColorPreview: document.getElementById("annoColorPreview"),
   tagPickerTree: document.getElementById("tagPickerTree"),
   selectedTagInfo: document.getElementById("selectedTagInfo"),
   draftTagName: document.getElementById("draftTagName"),
@@ -182,6 +182,11 @@ function ensureImageMeta(img, idx) {
   img.annotations = img.annotations || [];
   img.annotations.forEach((anno, index) => {
     anno.attrs = anno.attrs || {};
+    const tag = findTemplateTag(anno.tagId);
+    if (tag && tag.style) {
+      anno.shape = tag.style.shape;
+      anno.color = tag.style.color;
+    }
     anno.color = anno.color || "#2e6f86";
     anno.shape = anno.shape || "rect";
     anno.id = anno.id || `anno_${index + 1}`;
@@ -226,6 +231,71 @@ function normalizeAnnoRectForShape(rect, shape) {
 
 function findAnnoById(img, annoId) {
   return img.annotations.find((anno) => anno.id === annoId) || null;
+}
+
+function getTagStyle(tag) {
+  if (!tag.style) {
+    tag.style = { shape: "rect", color: "#2e6f86" };
+  }
+  return tag.style;
+}
+
+function syncStyleToTag(tagId, shape, color) {
+  const tag = findTemplateTag(tagId);
+  if (!tag) return;
+  tag.style = { shape, color };
+  state.images.forEach((img) => {
+    img.annotations.forEach((anno) => {
+      if (anno.tagId === tagId) {
+        anno.shape = shape;
+        anno.color = color;
+      }
+    });
+  });
+}
+
+function syncPickerFromActiveTag() {
+  const tag = findTemplateTag(state.activeDraftTagId);
+  if (!tag) {
+    renderColorPreview();
+    return;
+  }
+  const style = getTagStyle(tag);
+  el.annoShapeSelect.value = style.shape;
+  el.annoColor.value = style.color;
+  renderColorPreview();
+}
+
+function renderColorPreview() {
+  if (!el.annoColorPreview) return;
+  const val = (el.annoColor.value || "#2e6f86").toLowerCase();
+  el.annoColorPreview.textContent = val;
+  el.annoColorPreview.style.background = val;
+}
+
+function getParentMap(img) {
+  const parentMap = new Map();
+  img.annotations.forEach((anno) => parentMap.set(anno.id, null));
+
+  img.annotations.forEach((anno, index) => {
+    const idValue = (anno.attrs?.id || "").trim();
+    if (idValue) {
+      const previousSameId = img.annotations
+        .slice(0, index)
+        .filter((it) => (it.attrs?.id || "").trim() === idValue);
+      if (previousSameId.length > 0) {
+        parentMap.set(anno.id, previousSameId[previousSameId.length - 1].id);
+      }
+      return;
+    }
+
+    const containing = img.annotations
+      .filter((it) => it.id !== anno.id && containsRect(it.rect, anno.rect))
+      .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
+    if (containing.length > 0) parentMap.set(anno.id, containing[0].id);
+  });
+
+  return parentMap;
 }
 
 function pickTopAnnoAtPoint(img, x, y) {
@@ -340,6 +410,7 @@ function renderBoxes() {
   const img = selectedImage();
   el.drawLayer.innerHTML = "";
   if (!img) return;
+  const parentMap = getParentMap(img);
 
   img.annotations.forEach((anno) => {
     const box = document.createElement("div");
@@ -364,7 +435,7 @@ function renderBoxes() {
     } else {
       box.style.background = `repeating-linear-gradient(-45deg, ${anno.color} 0 4px, transparent 4px 8px)`;
     }
-    box.title = `${anno.tagPath}${anno.parentAnnoId ? " (子框)" : ""}`;
+    box.title = `${anno.tagPath}${parentMap.get(anno.id) ? " (子框)" : ""}`;
     box.addEventListener("click", (evt) => {
       evt.stopPropagation();
       const layerRect = el.drawLayer.getBoundingClientRect();
@@ -374,24 +445,6 @@ function renderBoxes() {
       if (picked) state.selectedAnnoId = picked.id;
       renderAll();
     });
-    box.addEventListener("mousedown", (evt) => {
-      if (!state.drawMode || state.drawingActive) return;
-      if (evt.target.closest(".resize-handle") || evt.target.closest(".box-delete")) return;
-      evt.stopPropagation();
-      state.selectedAnnoId = anno.id;
-      const layerRect = el.drawLayer.getBoundingClientRect();
-      state.boxInteraction = {
-        mode: "move",
-        annoId: anno.id,
-        edge: "",
-        startX: evt.clientX,
-        startY: evt.clientY,
-        layerWidth: layerRect.width,
-        layerHeight: layerRect.height,
-        originalRect: { ...anno.rect }
-      };
-    });
-
     if (anno.id === state.selectedAnnoId) {
       const delBtn = document.createElement("button");
       delBtn.className = "box-delete";
@@ -406,26 +459,6 @@ function renderBoxes() {
         saveState();
       });
       box.appendChild(delBtn);
-
-      ["n", "s", "e", "w", "ne", "nw", "se", "sw"].forEach((edge) => {
-        const handle = document.createElement("div");
-        handle.className = `resize-handle ${edge}`;
-        handle.addEventListener("mousedown", (evt) => {
-          evt.stopPropagation();
-          const layerRect = el.drawLayer.getBoundingClientRect();
-          state.boxInteraction = {
-            mode: "resize",
-            annoId: anno.id,
-            edge,
-            startX: evt.clientX,
-            startY: evt.clientY,
-            layerWidth: layerRect.width,
-            layerHeight: layerRect.height,
-            originalRect: { ...anno.rect }
-          };
-        });
-        box.appendChild(handle);
-      });
     }
     el.drawLayer.appendChild(box);
   });
@@ -600,6 +633,7 @@ function renderImageTagTree() {
     return;
   }
 
+  const parentMap = getParentMap(img);
   const childMap = new Map();
   function pushChild(parentId, anno) {
     const key = parentId || "ROOT";
@@ -608,8 +642,9 @@ function renderImageTagTree() {
   }
 
   img.annotations.forEach((anno) => {
-    const parentExists = anno.parentAnnoId && findAnnoById(img, anno.parentAnnoId);
-    pushChild(parentExists ? anno.parentAnnoId : null, anno);
+    const parentId = parentMap.get(anno.id);
+    const parentExists = parentId && findAnnoById(img, parentId);
+    pushChild(parentExists ? parentId : null, anno);
   });
 
   function sortNodes(list) {
@@ -689,6 +724,7 @@ function renderSelectedTagInfo() {
     return;
   }
   el.selectedTagInfo.textContent = `已选择标签：${templatePath(state.activeDraftTagId)}`;
+  syncPickerFromActiveTag();
 }
 
 function renderDraftTagParentOptions() {
@@ -763,42 +799,6 @@ function bindDrawEvents() {
   });
 
   window.addEventListener("mousemove", (evt) => {
-    if (state.boxInteraction) {
-      const img = selectedImage();
-      if (!img) return;
-      const interaction = state.boxInteraction;
-      const anno = findAnnoById(img, interaction.annoId);
-      if (!anno) return;
-
-      const dx = (evt.clientX - interaction.startX) / interaction.layerWidth;
-      const dy = (evt.clientY - interaction.startY) / interaction.layerHeight;
-      const orig = interaction.originalRect;
-
-      if (interaction.mode === "move") {
-        const moved = {
-          x: orig.x + dx,
-          y: orig.y + dy,
-          w: orig.w,
-          h: orig.h
-        };
-        anno.rect = normalizeAnnoRectForShape(moved, anno.shape);
-      } else {
-        const edge = interaction.edge;
-        let x1 = orig.x;
-        let y1 = orig.y;
-        let x2 = orig.x + orig.w;
-        let y2 = orig.y + orig.h;
-        if (edge.includes("w")) x1 += dx;
-        if (edge.includes("e")) x2 += dx;
-        if (edge.includes("n")) y1 += dy;
-        if (edge.includes("s")) y2 += dy;
-        const next = normalizeRect({ x1, y1, x2, y2 });
-        anno.rect = normalizeAnnoRectForShape(next, anno.shape);
-      }
-      renderBoxes();
-      return;
-    }
-
     if (drawing && start) {
       const rect = el.drawLayer.getBoundingClientRect();
       const x = clamp01((evt.clientX - rect.left) / rect.width);
@@ -811,16 +811,6 @@ function bindDrawEvents() {
   });
 
   window.addEventListener("mouseup", () => {
-    const img = selectedImage();
-    if (state.boxInteraction && img) {
-      const anno = findAnnoById(img, state.boxInteraction.annoId);
-      if (anno) {
-        const idValue = (anno.attrs.id || "").trim();
-        anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
-        saveState();
-      }
-    }
-    state.boxInteraction = null;
     drawing = false;
     start = null;
   });
@@ -897,6 +887,21 @@ function bindEvents() {
     renderAll();
   });
 
+  el.annoColor.addEventListener("input", () => {
+    renderColorPreview();
+    if (!state.activeDraftTagId) return;
+    syncStyleToTag(state.activeDraftTagId, el.annoShapeSelect.value, el.annoColor.value);
+    renderBoxes();
+    saveState();
+  });
+
+  el.annoShapeSelect.addEventListener("change", () => {
+    if (!state.activeDraftTagId) return;
+    syncStyleToTag(state.activeDraftTagId, el.annoShapeSelect.value, el.annoColor.value);
+    renderBoxes();
+    saveState();
+  });
+
   el.createDraftTagBtn.addEventListener("click", () => {
     const name = el.draftTagName.value.trim();
     const parentId = el.draftTagParent.value || null;
@@ -924,6 +929,7 @@ function bindEvents() {
 
     const tag = findTemplateTag(state.activeDraftTagId);
     if (!tag) { alert("标签不存在"); return; }
+    const style = getTagStyle(tag);
 
     const attrs = {};
     setIfNotEmpty(attrs, "note", el.annoNote.value);
@@ -933,8 +939,8 @@ function bindEvents() {
       tagId: tag.id,
       tagName: tag.name,
       tagPath: templatePath(tag.id),
-      shape: el.annoShapeSelect.value,
-      color: el.annoColor.value,
+      shape: style.shape,
+      color: style.color,
       transcription: el.annoTranscription.value.trim(),
       note: el.annoNote.value.trim(),
       rect: { ...state.draftRect },
@@ -1046,4 +1052,5 @@ function bindEvents() {
 loadState();
 bindDrawEvents();
 bindEvents();
+renderColorPreview();
 renderAll();
