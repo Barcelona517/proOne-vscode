@@ -63,7 +63,8 @@ const state = {
   drawingActive: false,
   draftRect: null,
   activeDraftTagId: null,
-  propInputs: {}
+  propInputs: {},
+  draggingThumbId: null
 };
 
 const el = {
@@ -197,6 +198,13 @@ function ensureImageMeta(img, idx) {
 function setIfNotEmpty(obj, key, value) {
   const trimmed = (value || "").trim();
   if (trimmed) obj[key] = trimmed;
+}
+
+function syncDrawLayerSize() {
+  const w = el.mainImage.clientWidth || 0;
+  const h = el.mainImage.clientHeight || 0;
+  el.drawLayer.style.width = `${w}px`;
+  el.drawLayer.style.height = `${h}px`;
 }
 
 function templateDepth(tagId) {
@@ -359,12 +367,54 @@ function renderThumbs() {
   state.images.forEach((img) => {
     const card = document.createElement("div");
     card.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""}`;
+    card.draggable = true;
+    card.dataset.imageId = img.id;
     card.innerHTML = `
       <div class="thumb-head"><button class="thumb-delete-btn" data-id="${img.id}">删除</button></div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
       <div class="thumb-meta">id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}</div>
     `;
+
+    card.addEventListener("dragstart", (evt) => {
+      state.draggingThumbId = img.id;
+      card.classList.add("dragging");
+      if (evt.dataTransfer) {
+        evt.dataTransfer.effectAllowed = "move";
+        evt.dataTransfer.setData("text/plain", img.id);
+      }
+    });
+
+    card.addEventListener("dragend", () => {
+      state.draggingThumbId = null;
+      card.classList.remove("dragging");
+      el.thumbList.querySelectorAll(".thumb-item.drag-over").forEach((node) => node.classList.remove("drag-over"));
+    });
+
+    card.addEventListener("dragover", (evt) => {
+      evt.preventDefault();
+      if (state.draggingThumbId && state.draggingThumbId !== img.id) {
+        card.classList.add("drag-over");
+      }
+    });
+
+    card.addEventListener("dragleave", () => {
+      card.classList.remove("drag-over");
+    });
+
+    card.addEventListener("drop", (evt) => {
+      evt.preventDefault();
+      card.classList.remove("drag-over");
+      const draggedId = state.draggingThumbId || (evt.dataTransfer ? evt.dataTransfer.getData("text/plain") : "");
+      if (!draggedId || draggedId === img.id) return;
+      const fromIndex = state.images.findIndex((it) => it.id === draggedId);
+      const toIndex = state.images.findIndex((it) => it.id === img.id);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+      const [moved] = state.images.splice(fromIndex, 1);
+      state.images.splice(toIndex, 0, moved);
+      saveState();
+      renderThumbs();
+    });
 
     card.addEventListener("click", () => {
       state.selectedImageId = img.id;
@@ -400,10 +450,14 @@ function renderMainImage() {
   if (!img) {
     el.mainImage.removeAttribute("src");
     el.viewerTitle.textContent = "未选择图片";
+    syncDrawLayerSize();
     return;
   }
-  el.mainImage.src = img.src;
+  if (el.mainImage.src !== img.src) {
+    el.mainImage.src = img.src;
+  }
   el.viewerTitle.textContent = `${img.name} | id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}`;
+  syncDrawLayerSize();
 }
 
 function renderBoxes() {
@@ -1052,5 +1106,10 @@ function bindEvents() {
 loadState();
 bindDrawEvents();
 bindEvents();
+el.mainImage.addEventListener("load", () => {
+  syncDrawLayerSize();
+  renderBoxes();
+});
+window.addEventListener("resize", syncDrawLayerSize);
 renderColorPreview();
 renderAll();
