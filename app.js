@@ -84,6 +84,7 @@ const el = {
   currentTargetHint: document.getElementById("currentTargetHint"),
   propsEditor: document.getElementById("propsEditor"),
   propNote: document.getElementById("propNote"),
+  unicodeAllocArea: document.getElementById("unicodeAllocArea"),
   propCodepoint: document.getElementById("propCodepoint"),
   allocateUnicodeBtn: document.getElementById("allocateUnicodeBtn"),
   unicodeHint: document.getElementById("unicodeHint"),
@@ -939,7 +940,7 @@ function renderPropsEditor() {
     el.propNote.disabled = true;
     el.propCodepoint.value = "";
     el.allocateUnicodeBtn.disabled = true;
-    el.allocateUnicodeBtn.style.display = "none";
+    el.unicodeAllocArea.classList.remove("active");
     setUnicodeHint("");
     return;
   }
@@ -963,12 +964,13 @@ function renderPropsEditor() {
 
   const unallocatedRareChars = getUnallocatedRareChars(anno);
   if (unallocatedRareChars.length > 0) {
-    el.allocateUnicodeBtn.style.display = "inline-block";
+    el.unicodeAllocArea.classList.add("active");
     el.allocateUnicodeBtn.disabled = false;
     setUnicodeHint(`检测到未收录字：${unallocatedRareChars.join(" ")}，可分配编码`);
   } else {
-    el.allocateUnicodeBtn.style.display = "none";
+    el.unicodeAllocArea.classList.remove("active");
     el.allocateUnicodeBtn.disabled = true;
+    el.propCodepoint.value = "";
     setUnicodeHint("当前框无未收录生僻字，无需分配编码");
   }
 }
@@ -1439,7 +1441,7 @@ function bindEvents() {
       } catch (err) {
         setUnicodeHint(err?.message || "编码分配失败");
       } finally {
-        el.allocateUnicodeBtn.disabled = !selectedAnno() || el.allocateUnicodeBtn.style.display === "none";
+        el.allocateUnicodeBtn.disabled = !selectedAnno() || !el.unicodeAllocArea.classList.contains("active");
         el.allocateUnicodeBtn.textContent = original;
       }
     });
