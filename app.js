@@ -84,6 +84,7 @@ const el = {
   viewerTitle: document.getElementById("viewerTitle"),
   panelBtnObject: document.getElementById("panelBtnObject"),
   panelBtnDraw: document.getElementById("panelBtnDraw"),
+  panelBtnTags: document.getElementById("panelBtnTags"),
   currentPanelLabel: document.getElementById("currentPanelLabel"),
   sectionProps: document.getElementById("sectionProps"),
   sectionDraw: document.getElementById("sectionDraw"),
@@ -112,8 +113,6 @@ const el = {
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
-  convertToSimplifiedBtn: document.getElementById("convertToSimplifiedBtn"),
-  convertHint: document.getElementById("convertHint"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
   toggleTemplateTreeBtn: document.getElementById("toggleTemplateTreeBtn"),
@@ -359,11 +358,6 @@ function convertTraditionalToSimplified(text) {
   };
 }
 
-function setConvertHint(message) {
-  if (!el.convertHint) return;
-  el.convertHint.textContent = message || "可将繁体自动转换为简体";
-}
-
 function setUnicodeHint(message) {
   if (!el.unicodeHint) return;
   el.unicodeHint.textContent = message || "选中框后可为未收录字分配编码";
@@ -555,7 +549,34 @@ function buildOcrVariants(baseCanvas) {
   sctx.putImageData(imgData, 0, 0);
   variants.push({ canvas: scaleCanvas, name: "binary2x" });
 
+  const likelyVertical = baseCanvas.height > baseCanvas.width * 1.15;
+  if (likelyVertical) {
+    variants.push({ canvas: rotateCanvas(baseCanvas, 90), name: "raw-r90" });
+    variants.push({ canvas: rotateCanvas(baseCanvas, -90), name: "raw-r270" });
+    variants.push({ canvas: rotateCanvas(scaleCanvas, 90), name: "binary2x-r90" });
+    variants.push({ canvas: rotateCanvas(scaleCanvas, -90), name: "binary2x-r270" });
+  }
+
   return variants;
+}
+
+function rotateCanvas(srcCanvas, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  const absCos = Math.abs(Math.cos(rad));
+  const absSin = Math.abs(Math.sin(rad));
+
+  const outW = Math.max(1, Math.round(srcCanvas.width * absCos + srcCanvas.height * absSin));
+  const outH = Math.max(1, Math.round(srcCanvas.width * absSin + srcCanvas.height * absCos));
+  const out = document.createElement("canvas");
+  out.width = outW;
+  out.height = outH;
+
+  const ctx = out.getContext("2d");
+  if (!ctx) return srcCanvas;
+  ctx.translate(outW / 2, outH / 2);
+  ctx.rotate(rad);
+  ctx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+  return out;
 }
 
 function normalizeOcrCandidateText(text) {
@@ -574,7 +595,9 @@ function scoreOcrText(text) {
 
 async function recognizeBestTextFromCanvas(cropCanvas) {
   const variants = buildOcrVariants(cropCanvas);
+  const languages = ["chi_tra", "chi_tra+chi_sim", "chi_sim+chi_tra"];
   const configs = [
+    { tessedit_pageseg_mode: "5", preserve_interword_spaces: "1" },
     { tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" },
     { tessedit_pageseg_mode: "11", preserve_interword_spaces: "1" }
   ];
@@ -583,17 +606,23 @@ async function recognizeBestTextFromCanvas(cropCanvas) {
   let bestScore = -1;
 
   for (const variant of variants) {
-    for (const cfg of configs) {
-      try {
-        const res = await window.Tesseract.recognize(variant.canvas, "chi_sim+chi_tra", { tessedit_pageseg_mode: cfg.tessedit_pageseg_mode, preserve_interword_spaces: cfg.preserve_interword_spaces });
-        const candidate = normalizeOcrCandidateText(res?.data?.text || "");
-        const score = scoreOcrText(candidate);
-        if (score > bestScore) {
-          bestScore = score;
-          best = candidate;
+    for (const lang of languages) {
+      for (const cfg of configs) {
+        try {
+          const res = await window.Tesseract.recognize(variant.canvas, lang, {
+            tessedit_pageseg_mode: cfg.tessedit_pageseg_mode,
+            preserve_interword_spaces: cfg.preserve_interword_spaces
+          });
+          const candidate = normalizeOcrCandidateText(res?.data?.text || "");
+          const confidence = Number(res?.data?.confidence || 0);
+          const score = scoreOcrText(candidate) + confidence / 25;
+          if (score > bestScore) {
+            bestScore = score;
+            best = candidate;
+          }
+        } catch (_) {
+          // Continue trying other OCR variants.
         }
-      } catch (_) {
-        // Continue trying other OCR variants.
       }
     }
   }
@@ -624,18 +653,19 @@ async function recognizeTextFromCurrentRect() {
 }
 
 function renderRightPanelTabs() {
-  const active = state.activeRightPanel === "draw" ? "draw" : "object";
+  const active = ["object", "draw", "tags"].includes(state.activeRightPanel) ? state.activeRightPanel : "object";
   state.activeRightPanel = active;
 
-  const isObject = active === "object";
-  el.panelBtnObject.classList.toggle("active", isObject);
-  el.panelBtnDraw.classList.toggle("active", !isObject);
+  el.panelBtnObject.classList.toggle("active", active === "object");
+  el.panelBtnDraw.classList.toggle("active", active === "draw");
+  el.panelBtnTags.classList.toggle("active", active === "tags");
 
-  el.sectionProps.classList.toggle("active", isObject);
-  el.sectionTags.classList.toggle("active", isObject);
-  el.sectionDraw.classList.toggle("active", !isObject);
+  el.sectionProps.classList.toggle("active", active === "object");
+  el.sectionDraw.classList.toggle("active", active === "draw");
+  el.sectionTags.classList.toggle("active", active === "tags");
 
-  el.currentPanelLabel.textContent = `当前板块：${isObject ? "当前对象" : "画框模式"}`;
+  const labels = { object: "当前对象", draw: "画框模式", tags: "标签树" };
+  el.currentPanelLabel.textContent = `当前板块：${labels[active]}`;
 }
 
 function syncDrawLayerSize() {
@@ -1046,6 +1076,7 @@ function renderPropsEditor() {
     el.propNote.disabled = true;
     el.propCodepoint.value = "";
     el.allocateUnicodeBtn.disabled = true;
+    el.allocateUnicodeBtn.classList.remove("active");
     el.unicodeAllocArea.classList.remove("active");
     setUnicodeHint("");
     return;
@@ -1071,10 +1102,12 @@ function renderPropsEditor() {
   const unallocatedRareChars = getUnallocatedRareChars(anno);
   if (unallocatedRareChars.length > 0) {
     el.unicodeAllocArea.classList.add("active");
+    el.allocateUnicodeBtn.classList.add("active");
     el.allocateUnicodeBtn.disabled = false;
     setUnicodeHint(`检测到未收录字：${unallocatedRareChars.join(" ")}，可分配编码`);
   } else {
     el.unicodeAllocArea.classList.remove("active");
+    el.allocateUnicodeBtn.classList.remove("active");
     el.allocateUnicodeBtn.disabled = true;
     el.propCodepoint.value = "";
     setUnicodeHint("当前框无未收录生僻字，无需分配编码");
@@ -1444,6 +1477,12 @@ function bindEvents() {
     saveState();
   });
 
+  el.panelBtnTags.addEventListener("click", () => {
+    state.activeRightPanel = "tags";
+    renderRightPanelTabs();
+    saveState();
+  });
+
   el.uploadBtn.addEventListener("click", () => el.uploadInput.click());
 
   el.uploadInput.addEventListener("change", (evt) => {
@@ -1512,38 +1551,7 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.drawingActive = false;
     el.annoTranscription.value = "";
-    setConvertHint("");
     renderAll();
-  });
-
-  if (el.convertToSimplifiedBtn) {
-    el.convertToSimplifiedBtn.addEventListener("click", async () => {
-      const originalText = el.convertToSimplifiedBtn.textContent;
-      el.convertToSimplifiedBtn.disabled = true;
-      el.convertToSimplifiedBtn.textContent = "识别中...";
-      setConvertHint("正在识别框内文字并转换...");
-      try {
-        const recognized = await recognizeTextFromCurrentRect();
-        const result = convertTraditionalToSimplified(recognized);
-        el.annoTranscription.value = result.text;
-        if (result.replacedByDashChars.length > 0) {
-          setConvertHint(`识别并转换完成，以下字无对应简体已替换为-：${result.replacedByDashChars.join(" ")}`);
-        } else if (result.unresolvedChars.length > 0) {
-          setConvertHint(`识别并转换完成，存在未识别字：${result.unresolvedChars.join(" ")}（可后续分配编码）`);
-        } else {
-          setConvertHint("识别并转换完成");
-        }
-      } catch (err) {
-        setConvertHint(err?.message || "识别失败，请重试");
-      } finally {
-        el.convertToSimplifiedBtn.disabled = false;
-        el.convertToSimplifiedBtn.textContent = originalText;
-      }
-    });
-  }
-
-  el.annoTranscription.addEventListener("input", () => {
-    setConvertHint("");
   });
 
   if (el.allocateUnicodeBtn) {
@@ -1562,7 +1570,7 @@ function bindEvents() {
       } catch (err) {
         setUnicodeHint(err?.message || "编码分配失败");
       } finally {
-        el.allocateUnicodeBtn.disabled = !selectedAnno() || !el.unicodeAllocArea.classList.contains("active");
+        el.allocateUnicodeBtn.disabled = !selectedAnno() || !el.allocateUnicodeBtn.classList.contains("active");
         el.allocateUnicodeBtn.textContent = original;
       }
     });
@@ -1637,7 +1645,6 @@ function bindEvents() {
     state.draftRect = null;
     state.drawingActive = false;
     el.annoTranscription.value = "";
-    setConvertHint("");
     renderAll();
     saveState();
   });
