@@ -422,6 +422,16 @@ function extractGlyphChars(text) {
   return analyzeSingleGlyphText(text).glyphs;
 }
 
+function isCharTagAnno(anno) {
+  if (!anno) return false;
+  const tagName = (anno.tagName || "").trim().toLowerCase();
+  if (tagName === "char") return true;
+  const path = (anno.tagPath || "").trim().toLowerCase();
+  if (!path) return false;
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] === "char";
+}
+
 function detectCollectedUnicodeForAnno(anno) {
   const text = (anno?.transcription || "").trim();
   const ch = pickPrimaryGlyphChar(text);
@@ -997,9 +1007,8 @@ function renderPropsEditor() {
     el.propsEditor.appendChild(row);
   });
   el.propNote.value = anno.transcription || "";
-  const singleCheck = analyzeSingleGlyphText(anno.transcription || "");
 
-  if (singleCheck.isSingle) {
+  if (isCharTagAnno(anno)) {
     el.allocateUnicodeBtn.classList.remove("hidden-block");
     el.allocateUnicodeBtn.disabled = false;
     el.propCodepoint.value = anno.attrs?.codepoint || "";
@@ -1010,7 +1019,7 @@ function renderPropsEditor() {
     el.allocateUnicodeBtn.disabled = true;
     el.propCodepoint.value = "";
     el.unicodeAllocArea.classList.remove("active");
-    setUnicodeHint("仅单字可分配unicode码");
+    setUnicodeHint("仅 char 标签可分配unicode码");
   }
 }
 
@@ -1445,6 +1454,9 @@ function bindEvents() {
       try {
         const anno = selectedAnno();
         if (!anno) throw new Error("请先选中一个已保存框");
+        if (!isCharTagAnno(anno)) {
+          throw new Error("仅 char 标签可分配unicode码");
+        }
         const singleCheck = analyzeSingleGlyphText(anno.transcription || "");
         if (!singleCheck.isSingle) {
           throw new Error("仅单字可分配unicode码");
