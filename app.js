@@ -71,6 +71,7 @@ const state = {
   pendingDrafts: [],
   activeDraftTagId: null,
   activeRightPanel: "object",
+  pendingUnicodeAfterSave: false,
   propInputs: {},
   draggingThumbId: null,
   batchDeleteImageIds: []
@@ -111,6 +112,9 @@ const el = {
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
+  recognizeResult: document.getElementById("recognizeResult"),
+  recognizeSingleBtn: document.getElementById("recognizeSingleBtn"),
+  recognizeHint: document.getElementById("recognizeHint"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
   templateTreeArea: document.getElementById("templateTreeArea"),
@@ -358,6 +362,29 @@ function convertTraditionalToSimplified(text) {
 function setUnicodeHint(message) {
   if (!el.unicodeHint) return;
   el.unicodeHint.textContent = message || "选中框后可为未收录字分配编码";
+}
+
+function setRecognizeHint(message) {
+  if (!el.recognizeHint) return;
+  el.recognizeHint.textContent = message || "用于识别单字并填入简体转写";
+}
+
+function isCjkChar(ch) {
+  const cp = ch.codePointAt(0);
+  return (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
+}
+
+function extractFirstSingleChar(text) {
+  const chars = [...(text || "")].filter((ch) => isCjkChar(ch) || isPuaChar(ch));
+  return chars[0] || "";
+}
+
+function resolveCollectedSimplifiedChar(ch) {
+  if (!ch) return null;
+  if (TRADITIONAL_CHAR_MAP[ch]) return TRADITIONAL_CHAR_MAP[ch];
+  if (isPuaChar(ch)) return null;
+  if (isCjkChar(ch)) return ch;
+  return null;
 }
 
 function cpToUPlus(cp) {
@@ -1525,9 +1552,47 @@ function bindEvents() {
     state.draftRect = null;
     state.pendingDrafts = [];
     state.drawingActive = false;
+    state.pendingUnicodeAfterSave = false;
     el.annoTranscription.value = "";
+    if (el.recognizeResult) el.recognizeResult.value = "";
+    setRecognizeHint("");
     renderAll();
   });
+
+  if (el.recognizeSingleBtn) {
+    el.recognizeSingleBtn.addEventListener("click", async () => {
+      const original = el.recognizeSingleBtn.textContent;
+      el.recognizeSingleBtn.disabled = true;
+      el.recognizeSingleBtn.textContent = "识别中...";
+      setRecognizeHint("正在识别单字...");
+      try {
+        const recognizedText = await recognizeTextFromCurrentRect();
+        const pickedChar = extractFirstSingleChar(recognizedText);
+        if (!pickedChar) {
+          setRecognizeHint("未识别到可用单字，请调整框选后重试");
+          return;
+        }
+
+        const simplifiedChar = resolveCollectedSimplifiedChar(pickedChar);
+        if (simplifiedChar) {
+          el.recognizeResult.value = simplifiedChar;
+          el.annoTranscription.value = simplifiedChar;
+          state.pendingUnicodeAfterSave = false;
+          setRecognizeHint(`识别成功：${pickedChar} -> ${simplifiedChar}`);
+        } else {
+          el.recognizeResult.value = pickedChar;
+          el.annoTranscription.value = pickedChar;
+          state.pendingUnicodeAfterSave = true;
+          setRecognizeHint("该字未被收录，请先保存标注，随后进入分配unicode环节");
+        }
+      } catch (err) {
+        setRecognizeHint(err?.message || "识别失败，请重试");
+      } finally {
+        el.recognizeSingleBtn.disabled = false;
+        el.recognizeSingleBtn.textContent = original;
+      }
+    });
+  }
 
   if (el.allocateUnicodeBtn) {
     el.allocateUnicodeBtn.addEventListener("click", async () => {
@@ -1619,7 +1684,13 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.draftRect = null;
     state.drawingActive = false;
+    const shouldEnterUnicodeFlow = state.pendingUnicodeAfterSave;
     el.annoTranscription.value = "";
+    if (el.recognizeResult) el.recognizeResult.value = "";
+    state.pendingUnicodeAfterSave = false;
+    if (shouldEnterUnicodeFlow) {
+      state.activeRightPanel = "object";
+    }
     renderAll();
     saveState();
   });
