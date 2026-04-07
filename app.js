@@ -180,7 +180,6 @@ function ensureTemplateOrder() {
 function ensureImageMeta(img, idx) {
   img.meta = img.meta || {};
   if (!img.meta.id) img.meta.id = `img_${idx + 1}`;
-  if (!img.meta.note) img.meta.note = "";
   img.annotations = img.annotations || [];
   img.annotations.forEach((anno, index) => {
     anno.attrs = anno.attrs || {};
@@ -192,6 +191,7 @@ function ensureImageMeta(img, idx) {
     anno.color = anno.color || "#2e6f86";
     anno.shape = anno.shape || "rect";
     anno.id = anno.id || `anno_${index + 1}`;
+    anno.transcription = anno.transcription || "";
     anno.parentAnnoId = anno.parentAnnoId || null;
   });
 }
@@ -551,7 +551,7 @@ function loadState() {
     category: item.category,
     contentElement: item.element,
     contentKind: item.kind,
-    meta: { id: `img_${idx + 1}`, note: "" },
+    meta: { id: `img_${idx + 1}` },
     annotations: []
   }));
   state.templateTags = templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }));
@@ -793,10 +793,12 @@ function renderPropsEditor() {
       row.appendChild(input);
       el.propsEditor.appendChild(row);
     });
-    el.propNote.value = img.meta.note || "";
+    el.propNote.value = "";
+    el.propNote.disabled = true;
     return;
   }
 
+  el.propNote.disabled = false;
   el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
   const templateTag = findTemplateTag(anno.tagId);
   const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
@@ -810,7 +812,7 @@ function renderPropsEditor() {
     row.appendChild(input);
     el.propsEditor.appendChild(row);
   });
-  el.propNote.value = anno.attrs.note || anno.note || "";
+  el.propNote.value = anno.transcription || "";
 }
 
 function renderEditMode() {
@@ -1177,7 +1179,7 @@ function bindEvents() {
         category: "用户上传",
         contentElement: "page",
         contentKind: "图片",
-        meta: { id: uid("img"), note: "" },
+        meta: { id: uid("img") },
         annotations: []
       };
       state.images.push(img);
@@ -1317,7 +1319,6 @@ function bindEvents() {
         shape: draftItem.shape,
         color: draftItem.color,
         transcription: el.annoTranscription.value.trim(),
-        note: "",
         rect: { ...draftItem.rect },
         attrs,
         parentAnnoId: null
@@ -1344,7 +1345,6 @@ function bindEvents() {
     const anno = selectedAnno();
     if (!anno) {
       Object.keys(state.propInputs).forEach((key) => { img.meta[key] = state.propInputs[key].value.trim(); });
-      img.meta.note = el.propNote.value.trim();
       renderAll();
       saveState();
       return;
@@ -1355,7 +1355,7 @@ function bindEvents() {
       setIfNotEmpty(nextAttrs, key, state.propInputs[key].value);
     });
     anno.attrs = nextAttrs;
-    anno.note = "";
+    anno.transcription = el.propNote.value.trim();
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();
