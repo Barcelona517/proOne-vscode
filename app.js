@@ -36,18 +36,18 @@ const seedImages = [
 ];
 
 const templateDefaults = [
-  { id: "t_article", name: "article", parentId: null, attrs: ["id", "type", "version"] },
+  { id: "t_article", name: "article", parentId: null, attrs: ["id"] },
   { id: "t_head", name: "head", parentId: "t_article", attrs: ["id"] },
   { id: "t_content", name: "content", parentId: "t_article", attrs: ["id"] },
   { id: "t_view", name: "view", parentId: "t_article", attrs: ["id"] },
-  { id: "t_title", name: "title", parentId: "t_head", attrs: ["id", "type", "name", "note"] },
-  { id: "t_subtitle", name: "subtitle", parentId: "t_head", attrs: ["id", "name", "note"] },
+  { id: "t_title", name: "title", parentId: "t_head", attrs: ["id", "name"] },
+  { id: "t_subtitle", name: "subtitle", parentId: "t_head", attrs: ["id", "name"] },
   { id: "t_authors", name: "authors", parentId: "t_head", attrs: ["id", "name"] },
   { id: "t_book", name: "book", parentId: "t_head", attrs: ["id", "name"] },
   { id: "t_date", name: "date", parentId: "t_head", attrs: ["id", "value"] },
-  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "type", "column", "direction"] },
-  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "type", "src", "name", "position", "note"] },
-  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "type", "column", "direction"] },
+  { id: "t_text", name: "text", parentId: "t_content", attrs: ["id", "column", "direction"] },
+  { id: "t_page", name: "page", parentId: "t_content", attrs: ["id", "src", "name", "position"] },
+  { id: "t_div", name: "div", parentId: "t_content", attrs: ["id", "column", "direction"] },
   { id: "t_sources", name: "sources", parentId: "t_view", attrs: ["id", "name"] }
 ];
 
@@ -93,7 +93,6 @@ const el = {
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
-  annoNote: document.getElementById("annoNote"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
   toggleTemplateTreeBtn: document.getElementById("toggleTemplateTreeBtn"),
@@ -179,8 +178,6 @@ function ensureTemplateOrder() {
 function ensureImageMeta(img, idx) {
   img.meta = img.meta || {};
   if (!img.meta.id) img.meta.id = `img_${idx + 1}`;
-  if (!img.meta.type) img.meta.type = "1";
-  if (!img.meta.version) img.meta.version = "1.0";
   if (!img.meta.note) img.meta.note = "";
   img.annotations = img.annotations || [];
   img.annotations.forEach((anno, index) => {
@@ -361,7 +358,7 @@ function loadState() {
     category: item.category,
     contentElement: item.element,
     contentKind: item.kind,
-    meta: { id: `img_${idx + 1}`, type: "1", version: "1.0", note: "" },
+    meta: { id: `img_${idx + 1}`, note: "" },
     annotations: []
   }));
   state.templateTags = templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }));
@@ -386,7 +383,7 @@ function renderThumbs() {
       </div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
-      <div class="thumb-meta">id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}</div>
+      <div class="thumb-meta">id:${img.meta.id}</div>
     `;
 
     card.addEventListener("dragstart", (evt) => {
@@ -481,7 +478,7 @@ function renderMainImage() {
   if (el.mainImage.src !== img.src) {
     el.mainImage.src = img.src;
   }
-  el.viewerTitle.textContent = `${img.name} | id:${img.meta.id} type:${img.meta.type} version:${img.meta.version}`;
+  el.viewerTitle.textContent = `${img.name} | id:${img.meta.id}`;
   syncDrawLayerSize();
 }
 
@@ -593,7 +590,7 @@ function renderPropsEditor() {
 
   if (!anno) {
     el.currentTargetHint.textContent = "当前：图片";
-    ["id", "type", "version"].forEach((key) => {
+    ["id"].forEach((key) => {
       const row = document.createElement("div");
       row.className = "prop-row";
       row.innerHTML = `<span>${key}</span>`;
@@ -609,7 +606,7 @@ function renderPropsEditor() {
 
   el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
   const templateTag = findTemplateTag(anno.tagId);
-  const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id", "type", "version"];
+  const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
   attrs.forEach((key) => {
     const row = document.createElement("div");
     row.className = "prop-row";
@@ -987,7 +984,7 @@ function bindEvents() {
         category: "用户上传",
         contentElement: "page",
         contentKind: "图片",
-        meta: { id: uid("img"), type: "1", version: "1.0", note: "" },
+        meta: { id: uid("img"), note: "" },
         annotations: []
       };
       state.images.push(img);
@@ -1041,7 +1038,6 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.drawingActive = false;
     el.annoTranscription.value = "";
-    el.annoNote.value = "";
     renderAll();
   });
 
@@ -1091,7 +1087,6 @@ function bindEvents() {
     let lastAnnoId = null;
     state.pendingDrafts.forEach((draftItem) => {
       const attrs = {};
-      setIfNotEmpty(attrs, "note", el.annoNote.value);
       const anno = {
         id: uid("anno"),
         tagId: draftItem.tagId,
@@ -1100,7 +1095,7 @@ function bindEvents() {
         shape: draftItem.shape,
         color: draftItem.color,
         transcription: el.annoTranscription.value.trim(),
-        note: el.annoNote.value.trim(),
+        note: "",
         rect: { ...draftItem.rect },
         attrs,
         parentAnnoId: null
@@ -1116,7 +1111,6 @@ function bindEvents() {
     state.draftRect = null;
     state.drawingActive = false;
     el.annoTranscription.value = "";
-    el.annoNote.value = "";
     renderAll();
     saveState();
   });
@@ -1137,9 +1131,8 @@ function bindEvents() {
     Object.keys(state.propInputs).forEach((key) => {
       setIfNotEmpty(nextAttrs, key, state.propInputs[key].value);
     });
-    setIfNotEmpty(nextAttrs, "note", el.propNote.value);
     anno.attrs = nextAttrs;
-    anno.note = anno.attrs.note || "";
+    anno.note = "";
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();
