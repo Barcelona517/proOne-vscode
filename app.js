@@ -1,4 +1,12 @@
 ﻿const STORAGE_KEY = "guji_editor_v4";
+const UNICODE_ALLOC_STORAGE_KEY = "guji_unicode_alloc_v1";
+const LOCAL_PUA_START = 0xE000;
+const LOCAL_PUA_END = 0xF8FF;
+const UNICODE_ALLOC_API_CANDIDATES = [
+  "/api/glyph/allocate",
+  "/api/unicode/allocate",
+  "http://localhost:3000/api/glyph/allocate"
+];
 
 const seedImages = [
   { path: "古籍示例/顶格/试验样例-00000002-00008.jpg", category: "顶格", element: "text", kind: "文字" },
@@ -76,6 +84,9 @@ const el = {
   currentTargetHint: document.getElementById("currentTargetHint"),
   propsEditor: document.getElementById("propsEditor"),
   propNote: document.getElementById("propNote"),
+  propCodepoint: document.getElementById("propCodepoint"),
+  allocateUnicodeBtn: document.getElementById("allocateUnicodeBtn"),
+  unicodeHint: document.getElementById("unicodeHint"),
   saveCurrentPropsBtn: document.getElementById("saveCurrentPropsBtn"),
   editModeArea: document.getElementById("editModeArea"),
   drawState: document.getElementById("drawState"),
@@ -332,6 +343,130 @@ function convertTraditionalToSimplified(text) {
 function setConvertHint(message) {
   if (!el.convertHint) return;
   el.convertHint.textContent = message || "可将繁体自动转换为简体";
+}
+
+function setUnicodeHint(message) {
+  if (!el.unicodeHint) return;
+  el.unicodeHint.textContent = message || "选中框后可为未收录字分配编码";
+}
+
+function cpToUPlus(cp) {
+  return `U+${cp.toString(16).toUpperCase()}`;
+}
+
+function parseJsonSafely(raw, fallback) {
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function isPuaChar(ch) {
+  const cp = ch.codePointAt(0);
+  return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD) || (cp >= 0x100000 && cp <= 0x10FFFD);
+}
+
+function getLocalAllocStore() {
+  const raw = localStorage.getItem(UNICODE_ALLOC_STORAGE_KEY);
+  const parsed = parseJsonSafely(raw, null);
+  if (!parsed || typeof parsed !== "object") {
+    return { charToCodepoint: {}, nextCp: LOCAL_PUA_START };
+  }
+  parsed.charToCodepoint = parsed.charToCodepoint || {};
+  if (!Number.isInteger(parsed.nextCp)) parsed.nextCp = LOCAL_PUA_START;
+  return parsed;
+}
+
+function saveLocalAllocStore(store) {
+  localStorage.setItem(UNICODE_ALLOC_STORAGE_KEY, JSON.stringify(store));
+}
+
+function allocateLocalPuaForChar(ch) {
+  const store = getLocalAllocStore();
+  const existing = store.charToCodepoint[ch];
+  if (existing) return { codepoint: existing, allocatedFrom: "local-cache" };
+
+  let cp = store.nextCp;
+  while (cp <= LOCAL_PUA_END) {
+    const candidate = cpToUPlus(cp);
+    const used = Object.values(store.charToCodepoint).includes(candidate);
+    if (!used) {
+      store.charToCodepoint[ch] = candidate;
+      store.nextCp = cp + 1;
+      saveLocalAllocStore(store);
+      return { codepoint: candidate, allocatedFrom: "local-pua" };
+    }
+    cp += 1;
+  }
+  throw new Error("本地 PUA 编码池已耗尽");
+}
+
+async function tryAllocateFromApi(ch, anno) {
+  const img = selectedImage();
+  for (const url of UNICODE_ALLOC_API_CANDIDATES) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          glyph: ch,
+          normalizedKey: `char-${ch.codePointAt(0).toString(16)}`,
+          ids: anno.attrs?.ids || null,
+          radicalId: Number.parseInt(anno.attrs?.radicalId || "", 10) || 1,
+          pronunciation: anno.attrs?.pronunciation || null,
+          sourcePage: img?.name || null,
+          confidenceScore: 0.6
+        })
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const cp = data?.codepoint || data?.allocated_cp || data?.ucode || null;
+      if (cp && /^U\+[0-9A-Fa-f]+$/.test(cp)) {
+        return { codepoint: cp.toUpperCase(), allocatedFrom: data?.allocated_from || "api" };
+      }
+    } catch (_) {
+      // Try next candidate endpoint.
+    }
+  }
+  return null;
+}
+
+async function allocateUnicodeForCurrentAnno() {
+  const anno = selectedAnno();
+  if (!anno) throw new Error("请先选中一个已保存框");
+
+  const text = (anno.transcription || "").trim();
+  if (!text) throw new Error("当前框“简体形式”为空，无法分配编码");
+
+  const targets = [...new Set([...text].filter((ch) => isPuaChar(ch)))];
+  if (targets.length === 0) {
+    throw new Error("当前框没有未收录字（PUA字符），无需分配");
+  }
+
+  const allocMap = parseJsonSafely(anno.attrs?.codepointMap || "{}", {});
+  const sourceMap = parseJsonSafely(anno.attrs?.codepointSourceMap || "{}", {});
+
+  for (const ch of targets) {
+    if (allocMap[ch]) continue;
+    const apiAllocated = await tryAllocateFromApi(ch, anno);
+    if (apiAllocated) {
+      allocMap[ch] = apiAllocated.codepoint;
+      sourceMap[ch] = apiAllocated.allocatedFrom;
+      continue;
+    }
+    const localAllocated = allocateLocalPuaForChar(ch);
+    allocMap[ch] = localAllocated.codepoint;
+    sourceMap[ch] = localAllocated.allocatedFrom;
+  }
+
+  anno.attrs = anno.attrs || {};
+  anno.attrs.codepointMap = JSON.stringify(allocMap);
+  anno.attrs.codepointSourceMap = JSON.stringify(sourceMap);
+  anno.attrs.codepoint = allocMap[targets[0]] || "";
+
+  const summary = targets.map((ch) => `${ch}:${allocMap[ch]}`).join("; ");
+  return summary;
 }
 
 function getRecognitionTargetRect() {
@@ -795,10 +930,14 @@ function renderPropsEditor() {
     });
     el.propNote.value = "";
     el.propNote.disabled = true;
+    el.propCodepoint.value = "";
+    el.allocateUnicodeBtn.disabled = true;
+    setUnicodeHint("");
     return;
   }
 
   el.propNote.disabled = false;
+  el.allocateUnicodeBtn.disabled = false;
   el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
   const templateTag = findTemplateTag(anno.tagId);
   const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
@@ -813,6 +952,8 @@ function renderPropsEditor() {
     el.propsEditor.appendChild(row);
   });
   el.propNote.value = anno.transcription || "";
+  el.propCodepoint.value = anno.attrs?.codepoint || "";
+  setUnicodeHint("");
 }
 
 function renderEditMode() {
@@ -1265,6 +1406,27 @@ function bindEvents() {
     setConvertHint("");
   });
 
+  if (el.allocateUnicodeBtn) {
+    el.allocateUnicodeBtn.addEventListener("click", async () => {
+      const original = el.allocateUnicodeBtn.textContent;
+      el.allocateUnicodeBtn.disabled = true;
+      el.allocateUnicodeBtn.textContent = "分配中...";
+      setUnicodeHint("正在分配编码...");
+      try {
+        const summary = await allocateUnicodeForCurrentAnno();
+        const anno = selectedAnno();
+        if (anno) el.propCodepoint.value = anno.attrs?.codepoint || "";
+        setUnicodeHint(`分配完成：${summary}`);
+        saveState();
+      } catch (err) {
+        setUnicodeHint(err?.message || "编码分配失败");
+      } finally {
+        el.allocateUnicodeBtn.disabled = !selectedAnno();
+        el.allocateUnicodeBtn.textContent = original;
+      }
+    });
+  }
+
   el.annoColor.addEventListener("input", () => {
     renderColorPreview(el.annoColor.value);
     if (!state.activeDraftTagId) return;
@@ -1356,6 +1518,9 @@ function bindEvents() {
     });
     anno.attrs = nextAttrs;
     anno.transcription = el.propNote.value.trim();
+    if (el.propCodepoint.value.trim()) {
+      anno.attrs.codepoint = el.propCodepoint.value.trim();
+    }
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();

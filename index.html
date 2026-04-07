@@ -45,6 +45,13 @@
           <label>简体形式
             <textarea id="propNote" rows="2" placeholder="框内简体形式"></textarea>
           </label>
+          <label>编码结果
+            <input id="propCodepoint" type="text" placeholder="例如：U+E000（自动分配）" readonly />
+          </label>
+          <div class="row-actions single-bottom-gap">
+            <button id="allocateUnicodeBtn" type="button">分配编码</button>
+          </div>
+          <div id="unicodeHint" class="muted">选中框后可为未收录字分配编码</div>
           <button id="saveCurrentPropsBtn">保存当前对象属性</button>
         </div>
 
