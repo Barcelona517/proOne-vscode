@@ -71,6 +71,7 @@ const state = {
   draftRect: null,
   pendingDrafts: [],
   activeDraftTagId: null,
+  activeRightPanel: "props",
   propInputs: {},
   draggingThumbId: null,
   batchDeleteImageIds: []
@@ -81,6 +82,13 @@ const el = {
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
   viewerTitle: document.getElementById("viewerTitle"),
+  panelBtnProps: document.getElementById("panelBtnProps"),
+  panelBtnDraw: document.getElementById("panelBtnDraw"),
+  panelBtnTags: document.getElementById("panelBtnTags"),
+  currentPanelLabel: document.getElementById("currentPanelLabel"),
+  sectionProps: document.getElementById("sectionProps"),
+  sectionDraw: document.getElementById("sectionDraw"),
+  sectionTags: document.getElementById("sectionTags"),
   currentTargetHint: document.getElementById("currentTargetHint"),
   propsEditor: document.getElementById("propsEditor"),
   propNote: document.getElementById("propNote"),
@@ -523,6 +531,77 @@ function rectToCanvasCrop(rect) {
   return canvas;
 }
 
+function buildOcrVariants(baseCanvas) {
+  const variants = [{ canvas: baseCanvas, name: "raw" }];
+
+  const scaleCanvas = document.createElement("canvas");
+  scaleCanvas.width = Math.max(1, baseCanvas.width * 2);
+  scaleCanvas.height = Math.max(1, baseCanvas.height * 2);
+  const sctx = scaleCanvas.getContext("2d");
+  if (!sctx) return variants;
+
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = "high";
+  sctx.drawImage(baseCanvas, 0, 0, scaleCanvas.width, scaleCanvas.height);
+
+  const imgData = sctx.getImageData(0, 0, scaleCanvas.width, scaleCanvas.height);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = Math.round(data[i] * 0.35 + data[i + 1] * 0.5 + data[i + 2] * 0.15);
+    const boosted = gray > 150 ? 255 : 0;
+    data[i] = boosted;
+    data[i + 1] = boosted;
+    data[i + 2] = boosted;
+  }
+  sctx.putImageData(imgData, 0, 0);
+  variants.push({ canvas: scaleCanvas, name: "binary2x" });
+
+  return variants;
+}
+
+function normalizeOcrCandidateText(text) {
+  return (text || "")
+    .replace(/\s+/g, "")
+    .replace(/[|｜]/g, "一")
+    .replace(/[“”]/g, "")
+    .trim();
+}
+
+function scoreOcrText(text) {
+  const cjk = (text.match(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g) || []).length;
+  const dash = (text.match(/-/g) || []).length;
+  return cjk * 4 + text.length - dash;
+}
+
+async function recognizeBestTextFromCanvas(cropCanvas) {
+  const variants = buildOcrVariants(cropCanvas);
+  const configs = [
+    { tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" },
+    { tessedit_pageseg_mode: "11", preserve_interword_spaces: "1" }
+  ];
+
+  let best = "";
+  let bestScore = -1;
+
+  for (const variant of variants) {
+    for (const cfg of configs) {
+      try {
+        const res = await window.Tesseract.recognize(variant.canvas, "chi_sim+chi_tra", { tessedit_pageseg_mode: cfg.tessedit_pageseg_mode, preserve_interword_spaces: cfg.preserve_interword_spaces });
+        const candidate = normalizeOcrCandidateText(res?.data?.text || "");
+        const score = scoreOcrText(candidate);
+        if (score > bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      } catch (_) {
+        // Continue trying other OCR variants.
+      }
+    }
+  }
+
+  return best;
+}
+
 async function recognizeTextFromCurrentRect() {
   const target = getRecognitionTargetRect();
   if (!target) {
@@ -538,12 +617,29 @@ async function recognizeTextFromCurrentRect() {
     throw new Error("当前图片尚未加载完成，请稍后重试");
   }
 
-  const ocrResult = await window.Tesseract.recognize(cropCanvas, "chi_sim+chi_tra");
-  const text = (ocrResult?.data?.text || "").replace(/\s+/g, "").trim();
+  const text = await recognizeBestTextFromCanvas(cropCanvas);
   if (!text) {
     throw new Error("未识别到文字，请调整框选范围后重试");
   }
   return text;
+}
+
+function renderRightPanelTabs() {
+  const mapping = {
+    props: { btn: el.panelBtnProps, section: el.sectionProps, label: "对象属性" },
+    draw: { btn: el.panelBtnDraw, section: el.sectionDraw, label: "画框模式" },
+    tags: { btn: el.panelBtnTags, section: el.sectionTags, label: "标签树" }
+  };
+
+  const active = mapping[state.activeRightPanel] ? state.activeRightPanel : "props";
+  state.activeRightPanel = active;
+
+  Object.keys(mapping).forEach((key) => {
+    const isActive = key === active;
+    mapping[key].btn.classList.toggle("active", isActive);
+    mapping[key].section.classList.toggle("active", isActive);
+  });
+  el.currentPanelLabel.textContent = `当前板块：${mapping[active].label}`;
 }
 
 function syncDrawLayerSize() {
@@ -676,7 +772,8 @@ function saveState() {
     templateTags: state.templateTags,
     selectedImageId: state.selectedImageId,
     selectedTemplateTagId: state.selectedTemplateTagId,
-    showTemplateTree: state.showTemplateTree
+    showTemplateTree: state.showTemplateTree,
+    activeRightPanel: state.activeRightPanel
   }));
 }
 
@@ -691,6 +788,7 @@ function loadState() {
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
         state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
         state.showTemplateTree = Boolean(parsed.showTemplateTree);
+        state.activeRightPanel = parsed.activeRightPanel || "props";
         ensureTemplateOrder();
         state.images.forEach((img, idx) => ensureImageMeta(img, idx));
         return;
@@ -713,6 +811,7 @@ function loadState() {
   state.selectedImageId = state.images[0]?.id || null;
   state.selectedTemplateTagId = state.templateTags[0]?.id || null;
   state.showTemplateTree = false;
+  state.activeRightPanel = "props";
 }
 
 function renderThumbs() {
@@ -1271,6 +1370,7 @@ function renderAll() {
   renderTemplateTagTree();
   renderTemplateTagSelect();
   renderDraftTagParentOptions();
+  renderRightPanelTabs();
 }
 
 function bindDrawEvents() {
@@ -1336,6 +1436,24 @@ function bindDrawEvents() {
 }
 
 function bindEvents() {
+  el.panelBtnProps.addEventListener("click", () => {
+    state.activeRightPanel = "props";
+    renderRightPanelTabs();
+    saveState();
+  });
+
+  el.panelBtnDraw.addEventListener("click", () => {
+    state.activeRightPanel = "draw";
+    renderRightPanelTabs();
+    saveState();
+  });
+
+  el.panelBtnTags.addEventListener("click", () => {
+    state.activeRightPanel = "tags";
+    renderRightPanelTabs();
+    saveState();
+  });
+
   el.uploadBtn.addEventListener("click", () => el.uploadInput.click());
 
   el.uploadInput.addEventListener("change", (evt) => {

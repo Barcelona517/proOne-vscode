@@ -81,6 +81,30 @@ body {
   justify-content: space-between;
 }
 
+.panel-switcher {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.switch-btn {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: #f8efe1;
+}
+
+.switch-btn.active {
+  background: linear-gradient(90deg, var(--brand), var(--brand-2));
+  color: #fff;
+  border-color: transparent;
+}
+
+.current-panel-label {
+  margin-bottom: 8px;
+}
+
 .thumb-list {
   display: flex;
   flex-direction: column;
@@ -272,6 +296,14 @@ body {
   padding: 8px;
   margin-bottom: 10px;
   background: #fff;
+}
+
+.panel-section {
+  display: none;
+}
+
+.panel-section.active {
+  display: block;
 }
 
 .section-title {
