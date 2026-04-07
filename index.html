@@ -41,9 +41,8 @@
         <div class="panel-switcher" id="panelSwitcher">
           <button id="panelBtnObject" class="switch-btn" type="button">当前对象</button>
           <button id="panelBtnDraw" class="switch-btn" type="button">画框模式</button>
-          <button id="panelBtnTags" class="switch-btn" type="button">标签树</button>
+          <button id="panelBtnTags" class="switch-btn" type="button">图片标签树</button>
         </div>
-        <div id="currentPanelLabel" class="muted current-panel-label">当前板块：当前对象</div>
 
         <div class="section panel-section" id="sectionProps" data-panel="object">
           <div class="section-title with-action">
@@ -117,14 +116,11 @@
         </div>
 
         <div class="section panel-section" id="sectionTags" data-panel="tags">
-          <div class="section-title with-action">
-            <span>标签树</span>
-            <button id="toggleTemplateTreeBtn" class="mini-btn" type="button">模板树</button>
-          </div>
+          <div class="section-title">标签树</div>
           <div class="picker-title">当前图片标签树（点击标签高亮对应框线）</div>
           <div id="imageTagTree" class="tag-tree"></div>
 
-          <div id="templateTreeArea" class="hidden-block">
+          <div id="templateTreeArea">
             <div class="picker-title">模板树（标签+属性，可增删改排）</div>
             <div id="templateTagTree" class="tag-tree"></div>
 

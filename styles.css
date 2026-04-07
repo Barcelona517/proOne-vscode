@@ -101,10 +101,6 @@ body {
   border-color: transparent;
 }
 
-.current-panel-label {
-  margin-bottom: 8px;
-}
-
 .thumb-list {
   display: flex;
   flex-direction: column;

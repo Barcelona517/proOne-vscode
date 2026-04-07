@@ -66,7 +66,6 @@ const state = {
   selectedAnnoId: null,
   selectedTemplateTagId: null,
   selectedTagFilterName: "",
-  showTemplateTree: false,
   drawingActive: false,
   draftRect: null,
   pendingDrafts: [],
@@ -85,7 +84,6 @@ const el = {
   panelBtnObject: document.getElementById("panelBtnObject"),
   panelBtnDraw: document.getElementById("panelBtnDraw"),
   panelBtnTags: document.getElementById("panelBtnTags"),
-  currentPanelLabel: document.getElementById("currentPanelLabel"),
   sectionProps: document.getElementById("sectionProps"),
   sectionDraw: document.getElementById("sectionDraw"),
   sectionTags: document.getElementById("sectionTags"),
@@ -115,7 +113,6 @@ const el = {
   annoTranscription: document.getElementById("annoTranscription"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
-  toggleTemplateTreeBtn: document.getElementById("toggleTemplateTreeBtn"),
   templateTreeArea: document.getElementById("templateTreeArea"),
   templateTagTree: document.getElementById("templateTagTree"),
   templateTagSelect: document.getElementById("templateTagSelect"),
@@ -664,8 +661,6 @@ function renderRightPanelTabs() {
   el.sectionDraw.classList.toggle("active", active === "draw");
   el.sectionTags.classList.toggle("active", active === "tags");
 
-  const labels = { object: "当前对象", draw: "画框模式", tags: "标签树" };
-  el.currentPanelLabel.textContent = `当前板块：${labels[active]}`;
 }
 
 function syncDrawLayerSize() {
@@ -798,7 +793,6 @@ function saveState() {
     templateTags: state.templateTags,
     selectedImageId: state.selectedImageId,
     selectedTemplateTagId: state.selectedTemplateTagId,
-    showTemplateTree: state.showTemplateTree,
     activeRightPanel: state.activeRightPanel
   }));
 }
@@ -813,7 +807,6 @@ function loadState() {
         state.templateTags = parsed.templateTags;
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
         state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
-        state.showTemplateTree = Boolean(parsed.showTemplateTree);
         state.activeRightPanel = parsed.activeRightPanel || "object";
         ensureTemplateOrder();
         state.images.forEach((img, idx) => ensureImageMeta(img, idx));
@@ -836,7 +829,6 @@ function loadState() {
   ensureTemplateOrder();
   state.selectedImageId = state.images[0]?.id || null;
   state.selectedTemplateTagId = state.templateTags[0]?.id || null;
-  state.showTemplateTree = false;
   state.activeRightPanel = "object";
 }
 
@@ -1324,16 +1316,6 @@ function renderImageTagTree() {
   el.imageTagTree.appendChild(ul);
 }
 
-function renderTemplateTreeVisibility() {
-  if (state.showTemplateTree) {
-    el.templateTreeArea.classList.add("active");
-    el.toggleTemplateTreeBtn.textContent = "收起模板树";
-  } else {
-    el.templateTreeArea.classList.remove("active");
-    el.toggleTemplateTreeBtn.textContent = "模板树";
-  }
-}
-
 function renderSelectedTagInfo() {
   if (!state.activeDraftTagId) {
     el.selectedTagInfo.textContent = "未选择标签";
@@ -1395,7 +1377,6 @@ function renderAll() {
   renderTagPickerTree();
   renderSelectedTagInfo();
   renderImageTagTree();
-  renderTemplateTreeVisibility();
   renderTemplateTagTree();
   renderTemplateTagSelect();
   renderDraftTagParentOptions();
@@ -1509,12 +1490,6 @@ function bindEvents() {
     };
     reader.readAsDataURL(file);
     evt.target.value = "";
-  });
-
-  el.toggleTemplateTreeBtn.addEventListener("click", () => {
-    state.showTemplateTree = !state.showTemplateTree;
-    renderAll();
-    saveState();
   });
 
   el.startDrawBtn.addEventListener("click", () => {
