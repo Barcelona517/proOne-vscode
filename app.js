@@ -334,6 +334,64 @@ function setConvertHint(message) {
   el.convertHint.textContent = message || "可将繁体自动转换为简体";
 }
 
+function getRecognitionTargetRect() {
+  if (state.pendingDrafts.length > 0) {
+    const draft = state.pendingDrafts[state.pendingDrafts.length - 1];
+    return { rect: draft.rect, source: "draft" };
+  }
+  const anno = selectedAnno();
+  if (anno?.rect) {
+    return { rect: anno.rect, source: "anno" };
+  }
+  return null;
+}
+
+function rectToCanvasCrop(rect) {
+  const imgEl = el.mainImage;
+  if (!imgEl || !imgEl.complete || !imgEl.naturalWidth || !imgEl.naturalHeight) return null;
+
+  const sx = Math.max(0, Math.floor(rect.x * imgEl.naturalWidth));
+  const sy = Math.max(0, Math.floor(rect.y * imgEl.naturalHeight));
+  const sw = Math.max(1, Math.floor(rect.w * imgEl.naturalWidth));
+  const sh = Math.max(1, Math.floor(rect.h * imgEl.naturalHeight));
+
+  const maxW = imgEl.naturalWidth - sx;
+  const maxH = imgEl.naturalHeight - sy;
+  const cw = Math.max(1, Math.min(sw, maxW));
+  const ch = Math.max(1, Math.min(sh, maxH));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(imgEl, sx, sy, cw, ch, 0, 0, cw, ch);
+  return canvas;
+}
+
+async function recognizeTextFromCurrentRect() {
+  const target = getRecognitionTargetRect();
+  if (!target) {
+    throw new Error("请先选中一个框，或先画一个待保存框");
+  }
+
+  if (!window.Tesseract) {
+    throw new Error("OCR 组件未加载，请检查网络后刷新页面");
+  }
+
+  const cropCanvas = rectToCanvasCrop(target.rect);
+  if (!cropCanvas) {
+    throw new Error("当前图片尚未加载完成，请稍后重试");
+  }
+
+  const ocrResult = await window.Tesseract.recognize(cropCanvas, "chi_sim+chi_tra");
+  const text = (ocrResult?.data?.text || "").replace(/\s+/g, "").trim();
+  if (!text) {
+    throw new Error("未识别到文字，请调整框选范围后重试");
+  }
+  return text;
+}
+
 function syncDrawLayerSize() {
   const w = el.mainImage.clientWidth || 0;
   const h = el.mainImage.clientHeight || 0;
@@ -1178,18 +1236,25 @@ function bindEvents() {
   });
 
   if (el.convertToSimplifiedBtn) {
-    el.convertToSimplifiedBtn.addEventListener("click", () => {
-      const raw = (el.annoTranscription.value || "").trim();
-      if (!raw) {
-        setConvertHint("请先输入内容再转换");
-        return;
-      }
-      const result = convertTraditionalToSimplified(raw);
-      el.annoTranscription.value = result.text;
-      if (result.unresolvedChars.length > 0) {
-        setConvertHint(`已转换，存在未识别字：${result.unresolvedChars.join(" ")}（可后续分配编码）`);
-      } else {
-        setConvertHint("已完成转换");
+    el.convertToSimplifiedBtn.addEventListener("click", async () => {
+      const originalText = el.convertToSimplifiedBtn.textContent;
+      el.convertToSimplifiedBtn.disabled = true;
+      el.convertToSimplifiedBtn.textContent = "识别中...";
+      setConvertHint("正在识别框内文字并转换...");
+      try {
+        const recognized = await recognizeTextFromCurrentRect();
+        const result = convertTraditionalToSimplified(recognized);
+        el.annoTranscription.value = result.text;
+        if (result.unresolvedChars.length > 0) {
+          setConvertHint(`识别并转换完成，存在未识别字：${result.unresolvedChars.join(" ")}（可后续分配编码）`);
+        } else {
+          setConvertHint("识别并转换完成");
+        }
+      } catch (err) {
+        setConvertHint(err?.message || "识别失败，请重试");
+      } finally {
+        el.convertToSimplifiedBtn.disabled = false;
+        el.convertToSimplifiedBtn.textContent = originalText;
       }
     });
   }
