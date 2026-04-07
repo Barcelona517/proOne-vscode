@@ -367,6 +367,13 @@ function isPuaChar(ch) {
   return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD) || (cp >= 0x100000 && cp <= 0x10FFFD);
 }
 
+function getUnallocatedRareChars(anno) {
+  const text = (anno?.transcription || "").trim();
+  if (!text) return [];
+  const map = parseJsonSafely(anno?.attrs?.codepointMap || "{}", {});
+  return [...new Set([...text].filter((ch) => isPuaChar(ch) && !map[ch]))];
+}
+
 function getLocalAllocStore() {
   const raw = localStorage.getItem(UNICODE_ALLOC_STORAGE_KEY);
   const parsed = parseJsonSafely(raw, null);
@@ -932,12 +939,12 @@ function renderPropsEditor() {
     el.propNote.disabled = true;
     el.propCodepoint.value = "";
     el.allocateUnicodeBtn.disabled = true;
+    el.allocateUnicodeBtn.style.display = "none";
     setUnicodeHint("");
     return;
   }
 
   el.propNote.disabled = false;
-  el.allocateUnicodeBtn.disabled = false;
   el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
   const templateTag = findTemplateTag(anno.tagId);
   const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
@@ -953,7 +960,17 @@ function renderPropsEditor() {
   });
   el.propNote.value = anno.transcription || "";
   el.propCodepoint.value = anno.attrs?.codepoint || "";
-  setUnicodeHint("");
+
+  const unallocatedRareChars = getUnallocatedRareChars(anno);
+  if (unallocatedRareChars.length > 0) {
+    el.allocateUnicodeBtn.style.display = "inline-block";
+    el.allocateUnicodeBtn.disabled = false;
+    setUnicodeHint(`检测到未收录字：${unallocatedRareChars.join(" ")}，可分配编码`);
+  } else {
+    el.allocateUnicodeBtn.style.display = "none";
+    el.allocateUnicodeBtn.disabled = true;
+    setUnicodeHint("当前框无未收录生僻字，无需分配编码");
+  }
 }
 
 function renderEditMode() {
@@ -1418,10 +1435,11 @@ function bindEvents() {
         if (anno) el.propCodepoint.value = anno.attrs?.codepoint || "";
         setUnicodeHint(`分配完成：${summary}`);
         saveState();
+        renderPropsEditor();
       } catch (err) {
         setUnicodeHint(err?.message || "编码分配失败");
       } finally {
-        el.allocateUnicodeBtn.disabled = !selectedAnno();
+        el.allocateUnicodeBtn.disabled = !selectedAnno() || el.allocateUnicodeBtn.style.display === "none";
         el.allocateUnicodeBtn.textContent = original;
       }
     });
