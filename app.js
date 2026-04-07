@@ -386,6 +386,10 @@ function pickPrimaryGlyphChar(text) {
   return [...(text || "")].find((ch) => isPuaChar(ch) || isCjkUnifiedChar(ch)) || "";
 }
 
+function extractGlyphChars(text) {
+  return [...(text || "")].filter((ch) => isPuaChar(ch) || isCjkUnifiedChar(ch));
+}
+
 function detectCollectedUnicodeForAnno(anno) {
   const text = (anno?.transcription || "").trim();
   const ch = pickPrimaryGlyphChar(text);
@@ -940,6 +944,7 @@ function renderPropsEditor() {
     el.propNote.disabled = true;
     el.propCodepoint.value = "";
     el.allocateUnicodeBtn.disabled = true;
+    el.allocateUnicodeBtn.classList.add("hidden-block");
     el.unicodeAllocArea.classList.remove("active");
     setUnicodeHint("");
     return;
@@ -960,10 +965,21 @@ function renderPropsEditor() {
     el.propsEditor.appendChild(row);
   });
   el.propNote.value = anno.transcription || "";
-  el.propCodepoint.value = anno.attrs?.codepoint || "";
-  el.unicodeAllocArea.classList.add("active");
-  el.allocateUnicodeBtn.disabled = false;
-  setUnicodeHint("点击“分配unicode码”后系统将先判断是否已收录");
+  const glyphChars = extractGlyphChars(anno.transcription || "");
+
+  if (glyphChars.length === 1) {
+    el.allocateUnicodeBtn.classList.remove("hidden-block");
+    el.allocateUnicodeBtn.disabled = false;
+    el.propCodepoint.value = anno.attrs?.codepoint || "";
+    el.unicodeAllocArea.classList.add("active");
+    setUnicodeHint("点击“分配unicode码”后系统将先判断是否已收录");
+  } else {
+    el.allocateUnicodeBtn.classList.add("hidden-block");
+    el.allocateUnicodeBtn.disabled = true;
+    el.propCodepoint.value = "";
+    el.unicodeAllocArea.classList.remove("active");
+    setUnicodeHint("仅单字可分配unicode码");
+  }
 }
 
 function renderEditMode() {
@@ -1397,6 +1413,9 @@ function bindEvents() {
       try {
         const anno = selectedAnno();
         if (!anno) throw new Error("请先选中一个已保存框");
+        if (extractGlyphChars(anno.transcription || "").length !== 1) {
+          throw new Error("仅单字可分配unicode码");
+        }
 
         const detected = detectCollectedUnicodeForAnno(anno);
         let summary = "";
