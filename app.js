@@ -68,12 +68,9 @@ const state = {
   selectedTagFilterName: "",
   drawingActive: false,
   draftRect: null,
-  recognizeRect: null,
   pendingDrafts: [],
-  recognizeSelecting: false,
   activeDraftTagId: null,
   activeRightPanel: "object",
-  pendingUnicodeAfterSave: false,
   propInputs: {},
   draggingThumbId: null,
   batchDeleteImageIds: []
@@ -114,10 +111,6 @@ const el = {
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
-  recognizeResult: document.getElementById("recognizeResult"),
-  startRecognizeRectBtn: document.getElementById("startRecognizeRectBtn"),
-  recognizeSingleBtn: document.getElementById("recognizeSingleBtn"),
-  recognizeHint: document.getElementById("recognizeHint"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
   templateTreeArea: document.getElementById("templateTreeArea"),
@@ -367,29 +360,6 @@ function setUnicodeHint(message) {
   el.unicodeHint.textContent = message || "选中框后可为未收录字分配编码";
 }
 
-function setRecognizeHint(message) {
-  if (!el.recognizeHint) return;
-  el.recognizeHint.textContent = message || "用于识别单字并填入简体转写";
-}
-
-function isCjkChar(ch) {
-  const cp = ch.codePointAt(0);
-  return (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
-}
-
-function extractFirstSingleChar(text) {
-  const chars = [...(text || "")].filter((ch) => isCjkChar(ch) || isPuaChar(ch));
-  return chars[0] || "";
-}
-
-function resolveCollectedSimplifiedChar(ch) {
-  if (!ch) return null;
-  if (TRADITIONAL_CHAR_MAP[ch]) return TRADITIONAL_CHAR_MAP[ch];
-  if (isPuaChar(ch)) return null;
-  if (isCjkChar(ch)) return ch;
-  return null;
-}
-
 function cpToUPlus(cp) {
   return `U+${cp.toString(16).toUpperCase()}`;
 }
@@ -514,260 +484,6 @@ async function allocateUnicodeForCurrentAnno() {
 
   const summary = targets.map((ch) => `${ch}:${allocMap[ch]}`).join("; ");
   return summary;
-}
-
-function getRecognitionTargetRect() {
-  if (state.recognizeRect) {
-    return { rect: state.recognizeRect, source: "recognize" };
-  }
-  return null;
-}
-
-function rectToCanvasCrop(rect) {
-  const imgEl = el.mainImage;
-  if (!imgEl || !imgEl.complete || !imgEl.naturalWidth || !imgEl.naturalHeight) return null;
-
-  const sx = Math.max(0, Math.floor(rect.x * imgEl.naturalWidth));
-  const sy = Math.max(0, Math.floor(rect.y * imgEl.naturalHeight));
-  const sw = Math.max(1, Math.floor(rect.w * imgEl.naturalWidth));
-  const sh = Math.max(1, Math.floor(rect.h * imgEl.naturalHeight));
-
-  const maxW = imgEl.naturalWidth - sx;
-  const maxH = imgEl.naturalHeight - sy;
-  const cw = Math.max(1, Math.min(sw, maxW));
-  const ch = Math.max(1, Math.min(sh, maxH));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = cw;
-  canvas.height = ch;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.drawImage(imgEl, sx, sy, cw, ch, 0, 0, cw, ch);
-  return canvas;
-}
-
-function buildOcrVariants(baseCanvas) {
-  const variants = [{ canvas: baseCanvas, name: "raw" }];
-
-  const scaleCanvas = document.createElement("canvas");
-  scaleCanvas.width = Math.max(1, baseCanvas.width * 2);
-  scaleCanvas.height = Math.max(1, baseCanvas.height * 2);
-  const sctx = scaleCanvas.getContext("2d");
-  if (!sctx) return variants;
-
-  sctx.imageSmoothingEnabled = true;
-  sctx.imageSmoothingQuality = "high";
-  sctx.drawImage(baseCanvas, 0, 0, scaleCanvas.width, scaleCanvas.height);
-
-  const imgData = sctx.getImageData(0, 0, scaleCanvas.width, scaleCanvas.height);
-  const data = imgData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const gray = Math.round(data[i] * 0.35 + data[i + 1] * 0.5 + data[i + 2] * 0.15);
-    const boosted = gray > 150 ? 255 : 0;
-    data[i] = boosted;
-    data[i + 1] = boosted;
-    data[i + 2] = boosted;
-  }
-  sctx.putImageData(imgData, 0, 0);
-  variants.push({ canvas: scaleCanvas, name: "binary2x" });
-
-  const likelyVertical = baseCanvas.height > baseCanvas.width * 1.15;
-  if (likelyVertical) {
-    variants.push({ canvas: rotateCanvas(baseCanvas, 90), name: "raw-r90" });
-    variants.push({ canvas: rotateCanvas(baseCanvas, -90), name: "raw-r270" });
-    variants.push({ canvas: rotateCanvas(scaleCanvas, 90), name: "binary2x-r90" });
-    variants.push({ canvas: rotateCanvas(scaleCanvas, -90), name: "binary2x-r270" });
-  }
-
-  return variants;
-}
-
-function rotateCanvas(srcCanvas, angleDeg) {
-  const rad = angleDeg * Math.PI / 180;
-  const absCos = Math.abs(Math.cos(rad));
-  const absSin = Math.abs(Math.sin(rad));
-
-  const outW = Math.max(1, Math.round(srcCanvas.width * absCos + srcCanvas.height * absSin));
-  const outH = Math.max(1, Math.round(srcCanvas.width * absSin + srcCanvas.height * absCos));
-  const out = document.createElement("canvas");
-  out.width = outW;
-  out.height = outH;
-
-  const ctx = out.getContext("2d");
-  if (!ctx) return srcCanvas;
-  ctx.translate(outW / 2, outH / 2);
-  ctx.rotate(rad);
-  ctx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
-  return out;
-}
-
-function normalizeOcrCandidateText(text) {
-  return (text || "")
-    .replace(/\s+/g, "")
-    .replace(/[|｜]/g, "一")
-    .replace(/[“”]/g, "")
-    .trim();
-}
-
-function firstCandidateCharFromText(text) {
-  return [...(text || "")].find((ch) => isCjkChar(ch) || isPuaChar(ch)) || "";
-}
-
-function scoreOcrText(text) {
-  const cjk = (text.match(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g) || []).length;
-  const dash = (text.match(/-/g) || []).length;
-  return cjk * 4 + text.length - dash;
-}
-
-async function recognizeBestTextFromCanvas(cropCanvas) {
-  const variants = buildOcrVariants(cropCanvas);
-  const languages = ["chi_tra", "chi_tra+chi_sim", "chi_sim+chi_tra"];
-  const configs = [
-    { tessedit_pageseg_mode: "5", preserve_interword_spaces: "1" },
-    { tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" },
-    { tessedit_pageseg_mode: "11", preserve_interword_spaces: "1" }
-  ];
-
-  let best = "";
-  let bestScore = -1;
-
-  for (const variant of variants) {
-    for (const lang of languages) {
-      for (const cfg of configs) {
-        try {
-          const res = await window.Tesseract.recognize(variant.canvas, lang, {
-            tessedit_pageseg_mode: cfg.tessedit_pageseg_mode,
-            preserve_interword_spaces: cfg.preserve_interword_spaces
-          });
-          const candidate = normalizeOcrCandidateText(res?.data?.text || "");
-          const confidence = Number(res?.data?.confidence || 0);
-          const score = scoreOcrText(candidate) + confidence / 25;
-          if (score > bestScore) {
-            bestScore = score;
-            best = candidate;
-          }
-        } catch (_) {
-          // Continue trying other OCR variants.
-        }
-      }
-    }
-  }
-
-  return best;
-}
-
-function expandCanvasWithPadding(srcCanvas, padRatio = 0.18) {
-  const padX = Math.max(4, Math.round(srcCanvas.width * padRatio));
-  const padY = Math.max(4, Math.round(srcCanvas.height * padRatio));
-  const out = document.createElement("canvas");
-  out.width = srcCanvas.width + padX * 2;
-  out.height = srcCanvas.height + padY * 2;
-  const ctx = out.getContext("2d");
-  if (!ctx) return srcCanvas;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, out.width, out.height);
-  ctx.drawImage(srcCanvas, padX, padY);
-  return out;
-}
-
-function collectOcrCandidates(res) {
-  const candidates = [];
-  const textCandidate = firstCandidateCharFromText(normalizeOcrCandidateText(res?.data?.text || ""));
-  if (textCandidate) {
-    candidates.push({ char: textCandidate, score: Number(res?.data?.confidence || 0) + 8 });
-  }
-
-  const symbols = Array.isArray(res?.data?.symbols) ? res.data.symbols : [];
-  symbols.forEach((sym) => {
-    const ch = (sym?.text || "").trim();
-    if (!ch || !(isCjkChar(ch) || isPuaChar(ch))) return;
-    const conf = Number(sym?.confidence || 0);
-    candidates.push({ char: ch, score: conf + 5 });
-  });
-  return candidates;
-}
-
-async function recognizeBestSingleCharFromCanvas(cropCanvas) {
-  const prepared = expandCanvasWithPadding(cropCanvas, 0.2);
-  const variants = buildOcrVariants(prepared);
-  const languages = ["chi_tra", "chi_tra+chi_sim", "chi_sim+chi_tra"];
-  const configs = [
-    { tessedit_pageseg_mode: "10", preserve_interword_spaces: "1" },
-    { tessedit_pageseg_mode: "13", preserve_interword_spaces: "1" },
-    { tessedit_pageseg_mode: "8", preserve_interword_spaces: "1" },
-    { tessedit_pageseg_mode: "5", preserve_interword_spaces: "1" }
-  ];
-
-  const scoreMap = new Map();
-
-  for (const variant of variants) {
-    for (const lang of languages) {
-      for (const cfg of configs) {
-        try {
-          const res = await window.Tesseract.recognize(variant.canvas, lang, {
-            tessedit_pageseg_mode: cfg.tessedit_pageseg_mode,
-            preserve_interword_spaces: cfg.preserve_interword_spaces
-          });
-          const candidates = collectOcrCandidates(res);
-          candidates.forEach((item) => {
-            let bonus = 0;
-            if (TRADITIONAL_CHAR_MAP[item.char]) bonus += 8;
-            if (Object.values(TRADITIONAL_CHAR_MAP).includes(item.char)) bonus += 5;
-            if (isPuaChar(item.char)) bonus -= 4;
-            const prev = scoreMap.get(item.char) || 0;
-            scoreMap.set(item.char, prev + item.score + bonus);
-          });
-        } catch (_) {
-          // continue
-        }
-      }
-    }
-  }
-
-  let bestChar = "";
-  let bestScore = -1;
-  scoreMap.forEach((score, ch) => {
-    if (score > bestScore) {
-      bestScore = score;
-      bestChar = ch;
-    }
-  });
-
-  return bestChar;
-}
-
-function getRecognitionCropCanvas() {
-  const target = getRecognitionTargetRect();
-  if (!target) {
-    throw new Error("请先点击开始勾选，在图片上框选后再识别");
-  }
-  if (!window.Tesseract) {
-    throw new Error("OCR 组件未加载，请检查网络后刷新页面");
-  }
-  const cropCanvas = rectToCanvasCrop(target.rect);
-  if (!cropCanvas) {
-    throw new Error("当前图片尚未加载完成，请稍后重试");
-  }
-  return cropCanvas;
-}
-
-async function recognizeSingleCharFromCurrentRect() {
-  const cropCanvas = getRecognitionCropCanvas();
-  const ch = await recognizeBestSingleCharFromCanvas(cropCanvas);
-  if (!ch) {
-    throw new Error("未识别到可用单字，请调整框选后重试");
-  }
-  return ch;
-}
-
-async function recognizeTextFromCurrentRect() {
-  const cropCanvas = getRecognitionCropCanvas();
-
-  const text = await recognizeBestTextFromCanvas(cropCanvas);
-  if (!text) {
-    throw new Error("未识别到文字，请调整框选范围后重试");
-  }
-  return text;
 }
 
 function renderRightPanelTabs() {
@@ -1164,17 +880,6 @@ function renderBoxes() {
     draft.title = `待保存: ${draftItem.tagPath}`;
     el.drawLayer.appendChild(draft);
   });
-
-  if (state.recognizeRect) {
-    const r = document.createElement("div");
-    r.className = "box recognize-box";
-    r.style.left = `${state.recognizeRect.x * 100}%`;
-    r.style.top = `${state.recognizeRect.y * 100}%`;
-    r.style.width = `${state.recognizeRect.w * 100}%`;
-    r.style.height = `${state.recognizeRect.h * 100}%`;
-    r.title = "自动识别框（单字）";
-    el.drawLayer.appendChild(r);
-  }
 }
 
 function renderPropsEditor() {
@@ -1518,16 +1223,13 @@ function renderAll() {
 function bindDrawEvents() {
   let drawing = false;
   let start = null;
-  let mode = null;
 
   el.drawLayer.addEventListener("mousedown", (evt) => {
-    if (!selectedImage()) return;
-    if (!state.drawingActive && !state.recognizeSelecting) return;
+    if (!state.drawingActive || !selectedImage()) return;
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((evt.clientX - rect.left) / rect.width);
     const y = clamp01((evt.clientY - rect.top) / rect.height);
     drawing = true;
-    mode = state.recognizeSelecting ? "recognize" : "draw";
     start = { x, y };
   });
 
@@ -1537,47 +1239,33 @@ function bindDrawEvents() {
       const x = clamp01((evt.clientX - rect.left) / rect.width);
       const y = clamp01((evt.clientY - rect.top) / rect.height);
       const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
-      if (mode === "recognize") {
-        state.recognizeRect = toShapeRect(base, "rect");
-      } else {
-        state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
-      }
+      state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
       renderBoxes();
       renderEditMode();
     }
   });
 
   window.addEventListener("mouseup", () => {
-    if (drawing && start) {
-      if (mode === "recognize" && state.recognizeRect && state.recognizeRect.w >= 0.003 && state.recognizeRect.h >= 0.003) {
-        state.recognizeSelecting = false;
-        if (el.startRecognizeRectBtn) el.startRecognizeRectBtn.textContent = "重新勾选";
-        setRecognizeHint("识别框已就绪，点击自动识别");
+    if (drawing && start && state.draftRect) {
+      const tag = findTemplateTag(state.activeDraftTagId);
+      if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
+        const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
+        if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
+        state.pendingDrafts.push({
+          rect: { ...state.draftRect },
+          tagId: tag.id,
+          tagName: tag.name,
+          tagPath: templatePath(tag.id),
+          shape: style.shape,
+          color: style.color
+        });
       }
-
-      if (mode === "draw" && state.draftRect) {
-        const tag = findTemplateTag(state.activeDraftTagId);
-        if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
-          const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
-          if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
-          state.pendingDrafts.push({
-            rect: { ...state.draftRect },
-            tagId: tag.id,
-            tagName: tag.name,
-            tagPath: templatePath(tag.id),
-            shape: style.shape,
-            color: style.color
-          });
-        }
-        state.draftRect = null;
-      }
-
+      state.draftRect = null;
       renderBoxes();
       renderEditMode();
     }
     drawing = false;
     start = null;
-    mode = null;
   });
 
   el.drawLayer.addEventListener("click", (evt) => {
@@ -1674,55 +1362,9 @@ function bindEvents() {
     state.draftRect = null;
     state.pendingDrafts = [];
     state.drawingActive = false;
-    state.pendingUnicodeAfterSave = false;
-    state.recognizeSelecting = false;
-    state.recognizeRect = null;
     el.annoTranscription.value = "";
-    if (el.recognizeResult) el.recognizeResult.value = "";
-    if (el.startRecognizeRectBtn) el.startRecognizeRectBtn.textContent = "开始勾选";
-    setRecognizeHint("");
     renderAll();
   });
-
-  if (el.startRecognizeRectBtn) {
-    el.startRecognizeRectBtn.addEventListener("click", () => {
-      state.recognizeSelecting = !state.recognizeSelecting;
-      state.recognizeRect = null;
-      el.startRecognizeRectBtn.textContent = state.recognizeSelecting ? "取消勾选" : "开始勾选";
-      setRecognizeHint(state.recognizeSelecting ? "请在图片上拖拽框选单字" : "点击开始勾选后，在图片上框选单字，再点自动识别");
-      renderBoxes();
-    });
-  }
-
-  if (el.recognizeSingleBtn) {
-    el.recognizeSingleBtn.addEventListener("click", async () => {
-      const original = el.recognizeSingleBtn.textContent;
-      el.recognizeSingleBtn.disabled = true;
-      el.recognizeSingleBtn.textContent = "识别中...";
-      setRecognizeHint("正在识别单字...");
-      try {
-        const pickedChar = await recognizeSingleCharFromCurrentRect();
-
-        const simplifiedChar = resolveCollectedSimplifiedChar(pickedChar);
-        if (simplifiedChar) {
-          el.recognizeResult.value = simplifiedChar;
-          el.annoTranscription.value = simplifiedChar;
-          state.pendingUnicodeAfterSave = false;
-          setRecognizeHint(`识别成功：${pickedChar} -> ${simplifiedChar}`);
-        } else {
-          el.recognizeResult.value = pickedChar;
-          el.annoTranscription.value = pickedChar;
-          state.pendingUnicodeAfterSave = true;
-          setRecognizeHint("该字未被收录，请先保存标注，随后进入分配unicode环节");
-        }
-      } catch (err) {
-        setRecognizeHint(err?.message || "识别失败，请重试");
-      } finally {
-        el.recognizeSingleBtn.disabled = false;
-        el.recognizeSingleBtn.textContent = original;
-      }
-    });
-  }
 
   if (el.allocateUnicodeBtn) {
     el.allocateUnicodeBtn.addEventListener("click", async () => {
@@ -1814,13 +1456,7 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.draftRect = null;
     state.drawingActive = false;
-    const shouldEnterUnicodeFlow = state.pendingUnicodeAfterSave;
     el.annoTranscription.value = "";
-    if (el.recognizeResult) el.recognizeResult.value = "";
-    state.pendingUnicodeAfterSave = false;
-    if (shouldEnterUnicodeFlow) {
-      state.activeRightPanel = "object";
-    }
     renderAll();
     saveState();
   });
