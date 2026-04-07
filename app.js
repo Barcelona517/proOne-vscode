@@ -68,7 +68,9 @@ const state = {
   selectedTagFilterName: "",
   drawingActive: false,
   draftRect: null,
+  recognizeRect: null,
   pendingDrafts: [],
+  recognizeSelecting: false,
   activeDraftTagId: null,
   activeRightPanel: "object",
   pendingUnicodeAfterSave: false,
@@ -113,6 +115,7 @@ const el = {
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
   recognizeResult: document.getElementById("recognizeResult"),
+  startRecognizeRectBtn: document.getElementById("startRecognizeRectBtn"),
   recognizeSingleBtn: document.getElementById("recognizeSingleBtn"),
   recognizeHint: document.getElementById("recognizeHint"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
@@ -514,13 +517,8 @@ async function allocateUnicodeForCurrentAnno() {
 }
 
 function getRecognitionTargetRect() {
-  if (state.pendingDrafts.length > 0) {
-    const draft = state.pendingDrafts[state.pendingDrafts.length - 1];
-    return { rect: draft.rect, source: "draft" };
-  }
-  const anno = selectedAnno();
-  if (anno?.rect) {
-    return { rect: anno.rect, source: "anno" };
+  if (state.recognizeRect) {
+    return { rect: state.recognizeRect, source: "recognize" };
   }
   return null;
 }
@@ -657,7 +655,7 @@ async function recognizeBestTextFromCanvas(cropCanvas) {
 async function recognizeTextFromCurrentRect() {
   const target = getRecognitionTargetRect();
   if (!target) {
-    throw new Error("请先选中一个框，或先画一个待保存框");
+    throw new Error("请先点击开始勾选，在图片上框选后再识别");
   }
 
   if (!window.Tesseract) {
@@ -1070,6 +1068,17 @@ function renderBoxes() {
     draft.title = `待保存: ${draftItem.tagPath}`;
     el.drawLayer.appendChild(draft);
   });
+
+  if (state.recognizeRect) {
+    const r = document.createElement("div");
+    r.className = "box recognize-box";
+    r.style.left = `${state.recognizeRect.x * 100}%`;
+    r.style.top = `${state.recognizeRect.y * 100}%`;
+    r.style.width = `${state.recognizeRect.w * 100}%`;
+    r.style.height = `${state.recognizeRect.h * 100}%`;
+    r.title = "自动识别框（单字）";
+    el.drawLayer.appendChild(r);
+  }
 }
 
 function renderPropsEditor() {
@@ -1413,13 +1422,16 @@ function renderAll() {
 function bindDrawEvents() {
   let drawing = false;
   let start = null;
+  let mode = null;
 
   el.drawLayer.addEventListener("mousedown", (evt) => {
-    if (!state.drawingActive || !selectedImage()) return;
+    if (!selectedImage()) return;
+    if (!state.drawingActive && !state.recognizeSelecting) return;
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((evt.clientX - rect.left) / rect.width);
     const y = clamp01((evt.clientY - rect.top) / rect.height);
     drawing = true;
+    mode = state.recognizeSelecting ? "recognize" : "draw";
     start = { x, y };
   });
 
@@ -1429,33 +1441,47 @@ function bindDrawEvents() {
       const x = clamp01((evt.clientX - rect.left) / rect.width);
       const y = clamp01((evt.clientY - rect.top) / rect.height);
       const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
-      state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
+      if (mode === "recognize") {
+        state.recognizeRect = toShapeRect(base, "rect");
+      } else {
+        state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
+      }
       renderBoxes();
       renderEditMode();
     }
   });
 
   window.addEventListener("mouseup", () => {
-    if (drawing && start && state.draftRect) {
-      const tag = findTemplateTag(state.activeDraftTagId);
-      if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
-        const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
-        if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
-        state.pendingDrafts.push({
-          rect: { ...state.draftRect },
-          tagId: tag.id,
-          tagName: tag.name,
-          tagPath: templatePath(tag.id),
-          shape: style.shape,
-          color: style.color
-        });
+    if (drawing && start) {
+      if (mode === "recognize" && state.recognizeRect && state.recognizeRect.w >= 0.003 && state.recognizeRect.h >= 0.003) {
+        state.recognizeSelecting = false;
+        if (el.startRecognizeRectBtn) el.startRecognizeRectBtn.textContent = "重新勾选";
+        setRecognizeHint("识别框已就绪，点击自动识别");
       }
-      state.draftRect = null;
+
+      if (mode === "draw" && state.draftRect) {
+        const tag = findTemplateTag(state.activeDraftTagId);
+        if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
+          const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
+          if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
+          state.pendingDrafts.push({
+            rect: { ...state.draftRect },
+            tagId: tag.id,
+            tagName: tag.name,
+            tagPath: templatePath(tag.id),
+            shape: style.shape,
+            color: style.color
+          });
+        }
+        state.draftRect = null;
+      }
+
       renderBoxes();
       renderEditMode();
     }
     drawing = false;
     start = null;
+    mode = null;
   });
 
   el.drawLayer.addEventListener("click", (evt) => {
@@ -1553,11 +1579,24 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.drawingActive = false;
     state.pendingUnicodeAfterSave = false;
+    state.recognizeSelecting = false;
+    state.recognizeRect = null;
     el.annoTranscription.value = "";
     if (el.recognizeResult) el.recognizeResult.value = "";
+    if (el.startRecognizeRectBtn) el.startRecognizeRectBtn.textContent = "开始勾选";
     setRecognizeHint("");
     renderAll();
   });
+
+  if (el.startRecognizeRectBtn) {
+    el.startRecognizeRectBtn.addEventListener("click", () => {
+      state.recognizeSelecting = !state.recognizeSelecting;
+      state.recognizeRect = null;
+      el.startRecognizeRectBtn.textContent = state.recognizeSelecting ? "取消勾选" : "开始勾选";
+      setRecognizeHint(state.recognizeSelecting ? "请在图片上拖拽框选单字" : "点击开始勾选后，在图片上框选单字，再点自动识别");
+      renderBoxes();
+    });
+  }
 
   if (el.recognizeSingleBtn) {
     el.recognizeSingleBtn.addEventListener("click", async () => {

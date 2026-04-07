@@ -280,6 +280,12 @@ body {
   box-shadow: 0 0 0 2px #111 inset, 0 0 0 2px #111, 0 0 14px rgba(17, 17, 17, 0.35);
 }
 
+.box.recognize-box {
+  border: 2px dashed #b65a2a;
+  background: rgba(182, 90, 42, 0.18);
+  pointer-events: none;
+}
+
 .box.temp.shape-line,
 .box.temp.shape-wave {
   border-top-style: dashed;
