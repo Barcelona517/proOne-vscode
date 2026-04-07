@@ -71,7 +71,7 @@ const state = {
   draftRect: null,
   pendingDrafts: [],
   activeDraftTagId: null,
-  activeRightPanel: "props",
+  activeRightPanel: "object",
   propInputs: {},
   draggingThumbId: null,
   batchDeleteImageIds: []
@@ -82,9 +82,8 @@ const el = {
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
   viewerTitle: document.getElementById("viewerTitle"),
-  panelBtnProps: document.getElementById("panelBtnProps"),
+  panelBtnObject: document.getElementById("panelBtnObject"),
   panelBtnDraw: document.getElementById("panelBtnDraw"),
-  panelBtnTags: document.getElementById("panelBtnTags"),
   currentPanelLabel: document.getElementById("currentPanelLabel"),
   sectionProps: document.getElementById("sectionProps"),
   sectionDraw: document.getElementById("sectionDraw"),
@@ -625,21 +624,18 @@ async function recognizeTextFromCurrentRect() {
 }
 
 function renderRightPanelTabs() {
-  const mapping = {
-    props: { btn: el.panelBtnProps, section: el.sectionProps, label: "对象属性" },
-    draw: { btn: el.panelBtnDraw, section: el.sectionDraw, label: "画框模式" },
-    tags: { btn: el.panelBtnTags, section: el.sectionTags, label: "标签树" }
-  };
-
-  const active = mapping[state.activeRightPanel] ? state.activeRightPanel : "props";
+  const active = state.activeRightPanel === "draw" ? "draw" : "object";
   state.activeRightPanel = active;
 
-  Object.keys(mapping).forEach((key) => {
-    const isActive = key === active;
-    mapping[key].btn.classList.toggle("active", isActive);
-    mapping[key].section.classList.toggle("active", isActive);
-  });
-  el.currentPanelLabel.textContent = `当前板块：${mapping[active].label}`;
+  const isObject = active === "object";
+  el.panelBtnObject.classList.toggle("active", isObject);
+  el.panelBtnDraw.classList.toggle("active", !isObject);
+
+  el.sectionProps.classList.toggle("active", isObject);
+  el.sectionTags.classList.toggle("active", isObject);
+  el.sectionDraw.classList.toggle("active", !isObject);
+
+  el.currentPanelLabel.textContent = `当前板块：${isObject ? "当前对象" : "画框模式"}`;
 }
 
 function syncDrawLayerSize() {
@@ -788,7 +784,7 @@ function loadState() {
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
         state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
         state.showTemplateTree = Boolean(parsed.showTemplateTree);
-        state.activeRightPanel = parsed.activeRightPanel || "props";
+        state.activeRightPanel = parsed.activeRightPanel || "object";
         ensureTemplateOrder();
         state.images.forEach((img, idx) => ensureImageMeta(img, idx));
         return;
@@ -811,7 +807,7 @@ function loadState() {
   state.selectedImageId = state.images[0]?.id || null;
   state.selectedTemplateTagId = state.templateTags[0]?.id || null;
   state.showTemplateTree = false;
-  state.activeRightPanel = "props";
+  state.activeRightPanel = "object";
 }
 
 function renderThumbs() {
@@ -1436,20 +1432,14 @@ function bindDrawEvents() {
 }
 
 function bindEvents() {
-  el.panelBtnProps.addEventListener("click", () => {
-    state.activeRightPanel = "props";
+  el.panelBtnObject.addEventListener("click", () => {
+    state.activeRightPanel = "object";
     renderRightPanelTabs();
     saveState();
   });
 
   el.panelBtnDraw.addEventListener("click", () => {
     state.activeRightPanel = "draw";
-    renderRightPanelTabs();
-    saveState();
-  });
-
-  el.panelBtnTags.addEventListener("click", () => {
-    state.activeRightPanel = "tags";
     renderRightPanelTabs();
     saveState();
   });

@@ -39,14 +39,13 @@
         <div class="panel-title">编辑面板</div>
 
         <div class="panel-switcher" id="panelSwitcher">
-          <button id="panelBtnProps" class="switch-btn" type="button">对象属性</button>
+           <button id="panelBtnObject" class="switch-btn" type="button">当前对象</button>
           <button id="panelBtnDraw" class="switch-btn" type="button">画框模式</button>
-          <button id="panelBtnTags" class="switch-btn" type="button">标签树</button>
         </div>
-        <div id="currentPanelLabel" class="muted current-panel-label">当前板块：对象属性</div>
+          <div id="currentPanelLabel" class="muted current-panel-label">当前板块：当前对象</div>
 
-        <div class="section panel-section" id="sectionProps" data-panel="props">
-          <div class="section-title">1. 当前对象属性</div>
+        <div class="section panel-section" id="sectionProps" data-panel="object">
+           <div class="section-title">属性</div>
           <div id="currentTargetHint" class="muted">当前：图片</div>
           <div id="propsEditor"></div>
           <label>简体形式
@@ -65,7 +64,7 @@
         </div>
 
         <div class="section panel-section" id="sectionDraw" data-panel="draw">
-          <div class="section-title">2. 画框模式</div>
+          <div class="section-title">画框模式</div>
           <div id="editModeArea">
             <div id="drawState" class="muted">编辑模式已开启</div>
             <div class="row-actions single-bottom-gap">
@@ -120,9 +119,9 @@
           </div>
         </div>
 
-        <div class="section panel-section" id="sectionTags" data-panel="tags">
+        <div class="section panel-section" id="sectionTags" data-panel="object">
           <div class="section-title with-action">
-            <span>3. 标签树</span>
+            <span>标签树</span>
             <button id="toggleTemplateTreeBtn" class="mini-btn" type="button">模板树</button>
           </div>
           <div class="picker-title">当前图片标签树（点击标签高亮对应框线）</div>
