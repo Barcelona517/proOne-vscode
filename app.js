@@ -377,6 +377,38 @@ function isPuaChar(ch) {
   return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD) || (cp >= 0x100000 && cp <= 0x10FFFD);
 }
 
+function isCjkUnifiedChar(ch) {
+  const cp = ch.codePointAt(0);
+  return (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
+}
+
+function pickPrimaryGlyphChar(text) {
+  return [...(text || "")].find((ch) => isPuaChar(ch) || isCjkUnifiedChar(ch)) || "";
+}
+
+function detectCollectedUnicodeForAnno(anno) {
+  const text = (anno?.transcription || "").trim();
+  const ch = pickPrimaryGlyphChar(text);
+  if (!ch) {
+    throw new Error("当前框“简体形式”中没有可识别字符");
+  }
+
+  const allocMap = parseJsonSafely(anno?.attrs?.codepointMap || "{}", {});
+  if (allocMap[ch]) {
+    return { char: ch, collected: true, codepoint: allocMap[ch], source: "mapped" };
+  }
+
+  if (isPuaChar(ch)) {
+    return { char: ch, collected: false, codepoint: null, source: "pua" };
+  }
+
+  if (isCjkUnifiedChar(ch)) {
+    return { char: ch, collected: true, codepoint: cpToUPlus(ch.codePointAt(0)), source: "cjk" };
+  }
+
+  return { char: ch, collected: false, codepoint: null, source: "other" };
+}
+
 function getUnallocatedRareChars(anno) {
   const text = (anno?.transcription || "").trim();
   if (!text) return [];
@@ -449,23 +481,26 @@ async function tryAllocateFromApi(ch, anno) {
   return null;
 }
 
-async function allocateUnicodeForCurrentAnno() {
+async function allocateUnicodeForCurrentAnno(forceTargets = []) {
   const anno = selectedAnno();
   if (!anno) throw new Error("请先选中一个已保存框");
 
   const text = (anno.transcription || "").trim();
   if (!text) throw new Error("当前框“简体形式”为空，无法分配编码");
 
-  const targets = [...new Set([...text].filter((ch) => isPuaChar(ch)))];
+  const targets = forceTargets.length > 0
+    ? [...new Set(forceTargets)]
+    : [...new Set([...text].filter((ch) => isPuaChar(ch)))];
   if (targets.length === 0) {
     throw new Error("当前框没有未收录字（PUA字符），无需分配");
   }
 
   const allocMap = parseJsonSafely(anno.attrs?.codepointMap || "{}", {});
   const sourceMap = parseJsonSafely(anno.attrs?.codepointSourceMap || "{}", {});
+  const forceSet = new Set(forceTargets);
 
   for (const ch of targets) {
-    if (allocMap[ch]) continue;
+    if (allocMap[ch] && !forceSet.has(ch)) continue;
     const apiAllocated = await tryAllocateFromApi(ch, anno);
     if (apiAllocated) {
       allocMap[ch] = apiAllocated.codepoint;
@@ -905,7 +940,6 @@ function renderPropsEditor() {
     el.propNote.disabled = true;
     el.propCodepoint.value = "";
     el.allocateUnicodeBtn.disabled = true;
-    el.allocateUnicodeBtn.classList.remove("active");
     el.unicodeAllocArea.classList.remove("active");
     setUnicodeHint("");
     return;
@@ -927,20 +961,9 @@ function renderPropsEditor() {
   });
   el.propNote.value = anno.transcription || "";
   el.propCodepoint.value = anno.attrs?.codepoint || "";
-
-  const unallocatedRareChars = getUnallocatedRareChars(anno);
-  if (unallocatedRareChars.length > 0) {
-    el.unicodeAllocArea.classList.add("active");
-    el.allocateUnicodeBtn.classList.add("active");
-    el.allocateUnicodeBtn.disabled = false;
-    setUnicodeHint(`检测到未收录字：${unallocatedRareChars.join(" ")}，可分配编码`);
-  } else {
-    el.unicodeAllocArea.classList.remove("active");
-    el.allocateUnicodeBtn.classList.remove("active");
-    el.allocateUnicodeBtn.disabled = true;
-    el.propCodepoint.value = "";
-    setUnicodeHint("当前框无未收录生僻字，无需分配编码");
-  }
+  el.unicodeAllocArea.classList.add("active");
+  el.allocateUnicodeBtn.disabled = false;
+  setUnicodeHint("点击“分配unicode码”后系统将先判断是否已收录");
 }
 
 function renderEditMode() {
@@ -1371,18 +1394,40 @@ function bindEvents() {
       const original = el.allocateUnicodeBtn.textContent;
       el.allocateUnicodeBtn.disabled = true;
       el.allocateUnicodeBtn.textContent = "分配中...";
-      setUnicodeHint("正在分配编码...");
       try {
-        const summary = await allocateUnicodeForCurrentAnno();
         const anno = selectedAnno();
-        if (anno) el.propCodepoint.value = anno.attrs?.codepoint || "";
+        if (!anno) throw new Error("请先选中一个已保存框");
+
+        const detected = detectCollectedUnicodeForAnno(anno);
+        let summary = "";
+
+        if (detected.collected) {
+          el.propCodepoint.value = detected.codepoint || "";
+          setUnicodeHint(`检测到已收录字：${detected.char}（${detected.codepoint}）`);
+          const ok = window.confirm(`系统识别该字已收录：${detected.char}（${detected.codepoint}）。\n是否正确？\n点击“取消”将进入分配unicode流程。`);
+          if (ok) {
+            anno.attrs = anno.attrs || {};
+            anno.attrs.codepoint = detected.codepoint || "";
+            saveState();
+            renderPropsEditor();
+            return;
+          }
+          setUnicodeHint("已选择重新分配，正在分配unicode...");
+          summary = await allocateUnicodeForCurrentAnno([detected.char]);
+        } else {
+          setUnicodeHint("未检测到已收录编码，正在分配unicode...");
+          summary = await allocateUnicodeForCurrentAnno([detected.char]);
+        }
+
+        const updatedAnno = selectedAnno();
+        if (updatedAnno) el.propCodepoint.value = updatedAnno.attrs?.codepoint || "";
         setUnicodeHint(`分配完成：${summary}`);
         saveState();
         renderPropsEditor();
       } catch (err) {
         setUnicodeHint(err?.message || "编码分配失败");
       } finally {
-        el.allocateUnicodeBtn.disabled = !selectedAnno() || !el.allocateUnicodeBtn.classList.contains("active");
+        el.allocateUnicodeBtn.disabled = !selectedAnno();
         el.allocateUnicodeBtn.textContent = original;
       }
     });
