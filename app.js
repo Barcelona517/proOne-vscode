@@ -326,18 +326,29 @@ function convertTraditionalToSimplified(text) {
     converted = converted.split(trad).join(TRADITIONAL_PHRASE_MAP[trad]);
   });
 
+  const mapValues = new Set(Object.values(TRADITIONAL_CHAR_MAP));
   let unresolvedChars = [];
+  let replacedByDashChars = [];
   const chars = [...converted].map((ch) => {
     if (TRADITIONAL_CHAR_MAP[ch]) return TRADITIONAL_CHAR_MAP[ch];
+
     const cp = ch.codePointAt(0);
     const isPua = (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD) || (cp >= 0x100000 && cp <= 0x10FFFD);
     if (isPua) unresolvedChars.push(ch);
+
+    const isCjkUnified = (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
+    if (isCjkUnified && !mapValues.has(ch)) {
+      replacedByDashChars.push(ch);
+      return "-";
+    }
+
     return ch;
   });
 
   return {
     text: chars.join(""),
-    unresolvedChars: [...new Set(unresolvedChars)]
+    unresolvedChars: [...new Set(unresolvedChars)],
+    replacedByDashChars: [...new Set(replacedByDashChars)]
   };
 }
 
@@ -1407,7 +1418,9 @@ function bindEvents() {
         const recognized = await recognizeTextFromCurrentRect();
         const result = convertTraditionalToSimplified(recognized);
         el.annoTranscription.value = result.text;
-        if (result.unresolvedChars.length > 0) {
+        if (result.replacedByDashChars.length > 0) {
+          setConvertHint(`识别并转换完成，以下字无对应简体已替换为-：${result.replacedByDashChars.join(" ")}`);
+        } else if (result.unresolvedChars.length > 0) {
           setConvertHint(`识别并转换完成，存在未识别字：${result.unresolvedChars.join(" ")}（可后续分配编码）`);
         } else {
           setConvertHint("识别并转换完成");
