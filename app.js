@@ -609,6 +609,10 @@ function normalizeOcrCandidateText(text) {
     .trim();
 }
 
+function firstCandidateCharFromText(text) {
+  return [...(text || "")].find((ch) => isCjkChar(ch) || isPuaChar(ch)) || "";
+}
+
 function scoreOcrText(text) {
   const cjk = (text.match(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g) || []).length;
   const dash = (text.match(/-/g) || []).length;
@@ -652,20 +656,112 @@ async function recognizeBestTextFromCanvas(cropCanvas) {
   return best;
 }
 
-async function recognizeTextFromCurrentRect() {
+function expandCanvasWithPadding(srcCanvas, padRatio = 0.18) {
+  const padX = Math.max(4, Math.round(srcCanvas.width * padRatio));
+  const padY = Math.max(4, Math.round(srcCanvas.height * padRatio));
+  const out = document.createElement("canvas");
+  out.width = srcCanvas.width + padX * 2;
+  out.height = srcCanvas.height + padY * 2;
+  const ctx = out.getContext("2d");
+  if (!ctx) return srcCanvas;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(srcCanvas, padX, padY);
+  return out;
+}
+
+function collectOcrCandidates(res) {
+  const candidates = [];
+  const textCandidate = firstCandidateCharFromText(normalizeOcrCandidateText(res?.data?.text || ""));
+  if (textCandidate) {
+    candidates.push({ char: textCandidate, score: Number(res?.data?.confidence || 0) + 8 });
+  }
+
+  const symbols = Array.isArray(res?.data?.symbols) ? res.data.symbols : [];
+  symbols.forEach((sym) => {
+    const ch = (sym?.text || "").trim();
+    if (!ch || !(isCjkChar(ch) || isPuaChar(ch))) return;
+    const conf = Number(sym?.confidence || 0);
+    candidates.push({ char: ch, score: conf + 5 });
+  });
+  return candidates;
+}
+
+async function recognizeBestSingleCharFromCanvas(cropCanvas) {
+  const prepared = expandCanvasWithPadding(cropCanvas, 0.2);
+  const variants = buildOcrVariants(prepared);
+  const languages = ["chi_tra", "chi_tra+chi_sim", "chi_sim+chi_tra"];
+  const configs = [
+    { tessedit_pageseg_mode: "10", preserve_interword_spaces: "1" },
+    { tessedit_pageseg_mode: "13", preserve_interword_spaces: "1" },
+    { tessedit_pageseg_mode: "8", preserve_interword_spaces: "1" },
+    { tessedit_pageseg_mode: "5", preserve_interword_spaces: "1" }
+  ];
+
+  const scoreMap = new Map();
+
+  for (const variant of variants) {
+    for (const lang of languages) {
+      for (const cfg of configs) {
+        try {
+          const res = await window.Tesseract.recognize(variant.canvas, lang, {
+            tessedit_pageseg_mode: cfg.tessedit_pageseg_mode,
+            preserve_interword_spaces: cfg.preserve_interword_spaces
+          });
+          const candidates = collectOcrCandidates(res);
+          candidates.forEach((item) => {
+            let bonus = 0;
+            if (TRADITIONAL_CHAR_MAP[item.char]) bonus += 8;
+            if (Object.values(TRADITIONAL_CHAR_MAP).includes(item.char)) bonus += 5;
+            if (isPuaChar(item.char)) bonus -= 4;
+            const prev = scoreMap.get(item.char) || 0;
+            scoreMap.set(item.char, prev + item.score + bonus);
+          });
+        } catch (_) {
+          // continue
+        }
+      }
+    }
+  }
+
+  let bestChar = "";
+  let bestScore = -1;
+  scoreMap.forEach((score, ch) => {
+    if (score > bestScore) {
+      bestScore = score;
+      bestChar = ch;
+    }
+  });
+
+  return bestChar;
+}
+
+function getRecognitionCropCanvas() {
   const target = getRecognitionTargetRect();
   if (!target) {
     throw new Error("请先点击开始勾选，在图片上框选后再识别");
   }
-
   if (!window.Tesseract) {
     throw new Error("OCR 组件未加载，请检查网络后刷新页面");
   }
-
   const cropCanvas = rectToCanvasCrop(target.rect);
   if (!cropCanvas) {
     throw new Error("当前图片尚未加载完成，请稍后重试");
   }
+  return cropCanvas;
+}
+
+async function recognizeSingleCharFromCurrentRect() {
+  const cropCanvas = getRecognitionCropCanvas();
+  const ch = await recognizeBestSingleCharFromCanvas(cropCanvas);
+  if (!ch) {
+    throw new Error("未识别到可用单字，请调整框选后重试");
+  }
+  return ch;
+}
+
+async function recognizeTextFromCurrentRect() {
+  const cropCanvas = getRecognitionCropCanvas();
 
   const text = await recognizeBestTextFromCanvas(cropCanvas);
   if (!text) {
@@ -1605,12 +1701,7 @@ function bindEvents() {
       el.recognizeSingleBtn.textContent = "识别中...";
       setRecognizeHint("正在识别单字...");
       try {
-        const recognizedText = await recognizeTextFromCurrentRect();
-        const pickedChar = extractFirstSingleChar(recognizedText);
-        if (!pickedChar) {
-          setRecognizeHint("未识别到可用单字，请调整框选后重试");
-          return;
-        }
+        const pickedChar = await recognizeSingleCharFromCurrentRect();
 
         const simplifiedChar = resolveCollectedSimplifiedChar(pickedChar);
         if (simplifiedChar) {
