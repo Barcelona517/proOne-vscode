@@ -382,12 +382,44 @@ function isCjkUnifiedChar(ch) {
   return (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
 }
 
+function isVariationSelector(ch) {
+  const cp = ch.codePointAt(0);
+  return (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF);
+}
+
+function isIgnorableForSingleGlyphCheck(ch) {
+  if (!ch) return true;
+  if (/\s/.test(ch)) return true;
+  if (isVariationSelector(ch)) return true;
+  return /[，。、；：？！,.!?:;'"“”‘’（）()【】\[\]《》<>「」『』—…·\-_\/\\]/.test(ch);
+}
+
+function analyzeSingleGlyphText(text) {
+  const glyphs = [];
+  let hasOtherVisibleChar = false;
+
+  [...(text || "")].forEach((ch) => {
+    if (isIgnorableForSingleGlyphCheck(ch)) return;
+    if (isPuaChar(ch) || isCjkUnifiedChar(ch)) {
+      glyphs.push(ch);
+      return;
+    }
+    hasOtherVisibleChar = true;
+  });
+
+  return {
+    glyphs,
+    isSingle: glyphs.length === 1 && !hasOtherVisibleChar
+  };
+}
+
 function pickPrimaryGlyphChar(text) {
-  return [...(text || "")].find((ch) => isPuaChar(ch) || isCjkUnifiedChar(ch)) || "";
+  const analyzed = analyzeSingleGlyphText(text);
+  return analyzed.glyphs[0] || "";
 }
 
 function extractGlyphChars(text) {
-  return [...(text || "")].filter((ch) => isPuaChar(ch) || isCjkUnifiedChar(ch));
+  return analyzeSingleGlyphText(text).glyphs;
 }
 
 function detectCollectedUnicodeForAnno(anno) {
@@ -965,9 +997,9 @@ function renderPropsEditor() {
     el.propsEditor.appendChild(row);
   });
   el.propNote.value = anno.transcription || "";
-  const glyphChars = extractGlyphChars(anno.transcription || "");
+  const singleCheck = analyzeSingleGlyphText(anno.transcription || "");
 
-  if (glyphChars.length === 1) {
+  if (singleCheck.isSingle) {
     el.allocateUnicodeBtn.classList.remove("hidden-block");
     el.allocateUnicodeBtn.disabled = false;
     el.propCodepoint.value = anno.attrs?.codepoint || "";
@@ -1413,7 +1445,8 @@ function bindEvents() {
       try {
         const anno = selectedAnno();
         if (!anno) throw new Error("请先选中一个已保存框");
-        if (extractGlyphChars(anno.transcription || "").length !== 1) {
+        const singleCheck = analyzeSingleGlyphText(anno.transcription || "");
+        if (!singleCheck.isSingle) {
           throw new Error("仅单字可分配unicode码");
         }
 
