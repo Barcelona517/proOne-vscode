@@ -973,7 +973,9 @@ async function autoDrawLayoutByAI() {
       tagName: matched.name,
       tagPath: matched.path,
       shape: matched.style.shape || "rect",
-      color: matched.style.color || "#2e6f86"
+      color: matched.style.color || "#2e6f86",
+      transcription: String(item?.transcription || item?.text || "").trim(),
+      meaning: String(item?.meaning || "").trim()
     });
   });
 
@@ -981,10 +983,19 @@ async function autoDrawLayoutByAI() {
     throw new Error("识别结果与当前第3层及以下标签不匹配");
   }
 
+  const overlapCheck = validatePendingDraftsNoSameTagOverlap(img, drafts);
+  if (!overlapCheck.ok) {
+    throw new Error(`自动画框失败：${overlapCheck.message}`);
+  }
+
+  const { lastAnnoId } = appendDraftsToAnnotations(img, drafts, { preferDraftText: true });
+  state.selectedAnnoId = lastAnnoId;
   state.drawingActive = false;
   state.glyphCreateActive = false;
   state.draftRect = null;
-  state.pendingDrafts = drafts;
+  state.pendingDrafts = [];
+  renderAll();
+  saveState();
 }
 
 function captureGlyphDraft(rect) {
@@ -1585,6 +1596,42 @@ function validatePendingDraftsNoSameTagOverlap(img, drafts) {
     }
   }
   return { ok: true, message: "" };
+}
+
+function appendDraftsToAnnotations(img, drafts, options = {}) {
+  const defaultTranscription = String(options.defaultTranscription || "").trim();
+  const defaultMeaning = String(options.defaultMeaning || "").trim();
+  const preferDraftText = options.preferDraftText !== false;
+  let lastAnnoId = null;
+
+  (drafts || []).forEach((draftItem) => {
+    const attrs = {};
+    const draftMeaning = String(draftItem?.meaning || "").trim();
+    const textToUse = preferDraftText
+      ? String(draftItem?.transcription || draftItem?.text || defaultTranscription || "").trim()
+      : defaultTranscription;
+    const meaningToUse = preferDraftText ? (draftMeaning || defaultMeaning) : defaultMeaning;
+    if (meaningToUse) attrs.meaning = meaningToUse;
+
+    const anno = {
+      id: uid("anno"),
+      tagId: draftItem.tagId,
+      tagName: draftItem.tagName,
+      tagPath: draftItem.tagPath,
+      shape: draftItem.shape,
+      color: draftItem.color,
+      transcription: textToUse,
+      rect: { ...draftItem.rect },
+      attrs,
+      parentAnnoId: null
+    };
+    const idValue = (anno.attrs.id || "").trim();
+    anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
+    img.annotations.push(anno);
+    lastAnnoId = anno.id;
+  });
+
+  return { lastAnnoId };
 }
 
 function rectIntersectionArea(a, b) {
@@ -3534,26 +3581,10 @@ function bindEvents() {
     const draftTranscription = textEnabled ? el.annoTranscription.value.trim() : "";
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
-    let lastAnnoId = null;
-    state.pendingDrafts.forEach((draftItem) => {
-      const attrs = {};
-      if (textEnabled && draftMeaning) attrs.meaning = draftMeaning;
-      const anno = {
-        id: uid("anno"),
-        tagId: draftItem.tagId,
-        tagName: draftItem.tagName,
-        tagPath: draftItem.tagPath,
-        shape: draftItem.shape,
-        color: draftItem.color,
-        transcription: draftTranscription,
-        rect: { ...draftItem.rect },
-        attrs,
-        parentAnnoId: null
-      };
-      const idValue = (anno.attrs.id || "").trim();
-      anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
-      img.annotations.push(anno);
-      lastAnnoId = anno.id;
+    const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
+      defaultTranscription: textEnabled ? draftTranscription : "",
+      defaultMeaning: textEnabled ? draftMeaning : "",
+      preferDraftText: false
     });
 
     state.selectedAnnoId = lastAnnoId;
