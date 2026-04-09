@@ -32,6 +32,68 @@ body {
   grid-template-rows: 52px 1fr;
 }
 
+.library-shell {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 52px 1fr;
+}
+
+.library-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, #fff7e5, #f7e4d2);
+}
+
+.library-topbar h1 {
+  font-size: 17px;
+  margin: 0;
+}
+
+.library-main {
+  padding: 14px;
+  overflow: auto;
+}
+
+.books-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.book-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.book-card-title {
+  font-weight: 700;
+}
+
+.book-card-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.book-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.book-delete-btn {
+  border-color: #c76f5d;
+  color: #9d2f1d;
+  background: #fff1ed;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;

@@ -1,7 +1,20 @@
 ﻿const STORAGE_KEY = "guji_editor_v4";
+const BOOKS_INDEX_KEY = `${STORAGE_KEY}_books_index`;
+const BOOK_DATA_KEY_PREFIX = `${STORAGE_KEY}_book_`;
+const DB_NAME = `${STORAGE_KEY}_db`;
+const DB_VERSION = 1;
+const DB_STORE_BOOKS_META = "books_meta";
+const DB_STORE_BOOKS_DATA = "books_data";
+const DB_STORE_KV = "kv";
+const STORAGE_MIGRATED_FLAG = `${STORAGE_KEY}_migrated_to_idb_v1`;
 const GLYPH_PUA_START = 0xE000;
 const GLYPH_PUA_END = 0xF8FF;
 const API_BASE = `${window.location.protocol}//${window.location.hostname}:3000`;
+
+let currentBookId = null;
+let booksIndexCache = [];
+let saveStateQueue = Promise.resolve();
+let dbPromise = null;
 
 const seedImages = [
   { path: "古籍示例/顶格/试验样例-00000002-00008.jpg", category: "顶格", element: "text", kind: "文字" },
@@ -77,6 +90,11 @@ const state = {
 };
 
 const el = {
+  libraryShell: document.getElementById("libraryShell"),
+  booksList: document.getElementById("booksList"),
+  newBookBtn: document.getElementById("newBookBtn"),
+  libraryImportInput: document.getElementById("libraryImportInput"),
+  backToLibraryBtn: document.getElementById("backToLibraryBtn"),
   thumbList: document.getElementById("thumbList"),
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
@@ -165,6 +183,173 @@ function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(
 function encodePath(path) { return path.split("/").map((part) => encodeURIComponent(part)).join("/"); }
 function fileToDisplayName(path) { return path.split("/").pop() || path; }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+function bookDataKey(bookId) {
+  return `${BOOK_DATA_KEY_PREFIX}${bookId}`;
+}
+
+function isIndexedDbSupported() {
+  return typeof window !== "undefined" && !!window.indexedDB;
+}
+
+function openStorageDb() {
+  if (!isIndexedDbSupported()) {
+    return Promise.reject(new Error("当前浏览器不支持 IndexedDB"));
+  }
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(DB_STORE_BOOKS_META)) {
+        db.createObjectStore(DB_STORE_BOOKS_META, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(DB_STORE_BOOKS_DATA)) {
+        db.createObjectStore(DB_STORE_BOOKS_DATA, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(DB_STORE_KV)) {
+        db.createObjectStore(DB_STORE_KV, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("打开 IndexedDB 失败"));
+  }).catch((err) => {
+    dbPromise = null;
+    throw err;
+  });
+  return dbPromise;
+}
+
+async function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB 请求失败"));
+  });
+}
+
+async function idbGet(storeName, key) {
+  const db = await openStorageDb();
+  const tx = db.transaction(storeName, "readonly");
+  const store = tx.objectStore(storeName);
+  return idbRequest(store.get(key));
+}
+
+async function idbPut(storeName, value) {
+  const db = await openStorageDb();
+  const tx = db.transaction(storeName, "readwrite");
+  const store = tx.objectStore(storeName);
+  await idbRequest(store.put(value));
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB 写入事务失败"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB 写入事务中止"));
+  });
+}
+
+async function idbDelete(storeName, key) {
+  const db = await openStorageDb();
+  const tx = db.transaction(storeName, "readwrite");
+  const store = tx.objectStore(storeName);
+  await idbRequest(store.delete(key));
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB 删除事务失败"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB 删除事务中止"));
+  });
+}
+
+async function idbGetAll(storeName) {
+  const db = await openStorageDb();
+  const tx = db.transaction(storeName, "readonly");
+  const store = tx.objectStore(storeName);
+  return idbRequest(store.getAll());
+}
+
+async function dbLoadBooksIndex() {
+  const rows = await idbGetAll(DB_STORE_BOOKS_META);
+  const list = Array.isArray(rows) ? rows : [];
+  list.sort((a, b) => {
+    const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    return tb - ta;
+  });
+  return list;
+}
+
+async function dbSaveBooksIndex(books) {
+  const db = await openStorageDb();
+  const tx = db.transaction(DB_STORE_BOOKS_META, "readwrite");
+  const store = tx.objectStore(DB_STORE_BOOKS_META);
+  const oldRows = await idbRequest(store.getAll());
+  const oldIds = new Set((oldRows || []).map((item) => item.id));
+  const nextIds = new Set((books || []).map((item) => item.id));
+  (books || []).forEach((item) => store.put(item));
+  oldIds.forEach((id) => {
+    if (!nextIds.has(id)) {
+      store.delete(id);
+    }
+  });
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error || new Error("保存书籍索引失败"));
+    tx.onabort = () => reject(tx.error || new Error("保存书籍索引失败"));
+  });
+}
+
+async function dbLoadBookData(bookId) {
+  const row = await idbGet(DB_STORE_BOOKS_DATA, bookId);
+  return row?.data || null;
+}
+
+async function dbSaveBookData(bookId, data) {
+  return idbPut(DB_STORE_BOOKS_DATA, { id: bookId, data });
+}
+
+async function dbDeleteBookData(bookId) {
+  return idbDelete(DB_STORE_BOOKS_DATA, bookId);
+}
+
+async function dbGetFlag(key) {
+  const row = await idbGet(DB_STORE_KV, key);
+  return row?.value;
+}
+
+async function dbSetFlag(key, value) {
+  return idbPut(DB_STORE_KV, { key, value });
+}
+
+function loadBooksIndex() {
+  return Array.isArray(booksIndexCache) ? booksIndexCache.slice() : [];
+}
+
+function saveBooksIndex(books) {
+  booksIndexCache = Array.isArray(books) ? books.slice() : [];
+}
+
+async function persistBooksIndex() {
+  await dbSaveBooksIndex(booksIndexCache);
+}
+
+function reportSaveError(err) {
+  const msg = err?.message || "保存失败";
+  if (/quota|配额|空间/i.test(msg)) {
+    alert("保存失败：浏览器存储空间不足，请清理站点数据后重试");
+    return;
+  }
+  alert(msg);
+}
+
+function showEditorView() {
+  if (el.libraryShell) el.libraryShell.classList.add("hidden");
+  const appShell = document.querySelector(".app-shell");
+  if (appShell) appShell.classList.remove("hidden");
+}
+
+function showLibraryView() {
+  const appShell = document.querySelector(".app-shell");
+  if (appShell) appShell.classList.add("hidden");
+  if (el.libraryShell) el.libraryShell.classList.remove("hidden");
+}
 
 function normalizeRect(rect) {
   const x1 = Math.min(rect.x1, rect.x2);
@@ -1592,7 +1777,7 @@ async function importImageFile(file) {
   state.selectedImageId = img.id;
 }
 
-async function importPdfFile(file) {
+async function buildPdfImageItems(file) {
   const pdfjsLib = window.pdfjsLib;
   if (!pdfjsLib || typeof pdfjsLib.getDocument !== "function") {
     throw new Error("PDF 解析库未加载，请检查网络后重试");
@@ -1606,7 +1791,7 @@ async function importPdfFile(file) {
   const loadingTask = pdfjsLib.getDocument({ data });
   const pdf = await loadingTask.promise;
   const baseName = stripFileExt(file.name) || "pdf";
-  const createdIds = [];
+  const items = [];
 
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
     const page = await pdf.getPage(pageNo);
@@ -1619,15 +1804,149 @@ async function importPdfFile(file) {
     await page.render({ canvasContext: ctx, viewport }).promise;
     const src = canvas.toDataURL("image/png");
     const name = `${baseName}_p${String(pageNo).padStart(3, "0")}.png`;
-    const img = createUploadedImageItem(name, src);
+    items.push(createUploadedImageItem(name, src));
+  }
+  return items;
+}
+
+async function importPdfFile(file) {
+  const items = await buildPdfImageItems(file);
+  const createdIds = [];
+  items.forEach((img) => {
     state.images.push(img);
     createdIds.push(img.id);
-  }
+  });
 
   if (createdIds.length > 0) {
     state.selectedImageId = createdIds[0];
     alert(`PDF 导入完成，共 ${createdIds.length} 页`);
   }
+}
+
+function parseImportedXmlProject(xmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, "application/xml");
+  const parseErr = doc.querySelector("parsererror");
+  if (parseErr) {
+    throw new Error("XML 解析失败，请检查文件格式");
+  }
+
+  const project = doc.querySelector("gujiProject");
+  if (!project) throw new Error("不是可识别的导出 XML 文件");
+
+  const template = [];
+  const templateRoot = project.querySelector("template");
+  function walkTag(tagNode, parentId = null) {
+    const id = tagNode.getAttribute("id") || uid("tag");
+    const name = tagNode.getAttribute("name") || "tag";
+    const order = Number(tagNode.getAttribute("order") || "0") || 0;
+    const attrs = String(tagNode.getAttribute("attrs") || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const shape = String(tagNode.getAttribute("shape") || "").trim();
+    const color = String(tagNode.getAttribute("color") || "").trim();
+    const item = { id, name, parentId, attrs, order };
+    if (shape || color) item.style = { shape: shape || "rect", color: color || "#2e6f86" };
+    template.push(item);
+    Array.from(tagNode.children).filter((n) => n.tagName === "tag").forEach((child) => walkTag(child, id));
+  }
+  if (templateRoot) {
+    Array.from(templateRoot.children).filter((n) => n.tagName === "tag").forEach((node) => walkTag(node, null));
+  }
+
+  const images = [];
+  const imageNodes = Array.from(project.querySelectorAll("images > image"));
+  imageNodes.forEach((node, idx) => {
+    const image = {
+      id: node.getAttribute("id") || uid("img"),
+      name: node.getAttribute("name") || `image_${idx + 1}`,
+      src: node.getAttribute("src") || "",
+      category: node.getAttribute("category") || "导入XML",
+      contentElement: node.getAttribute("contentElement") || "page",
+      contentKind: node.getAttribute("contentKind") || "图片",
+      meta: {},
+      annotations: []
+    };
+    node.querySelectorAll("meta > field").forEach((f) => {
+      const key = f.getAttribute("name");
+      const value = f.getAttribute("value") || "";
+      if (key) image.meta[key] = value;
+    });
+    node.querySelectorAll("annotations > annotation").forEach((a) => {
+      const rectNode = a.querySelector("rect");
+      const anno = {
+        id: a.getAttribute("id") || uid("anno"),
+        tagId: a.getAttribute("tagId") || "",
+        tagName: a.getAttribute("tagName") || "",
+        tagPath: a.getAttribute("tagPath") || "",
+        shape: a.getAttribute("shape") || "rect",
+        color: a.getAttribute("color") || "#2e6f86",
+        transcription: a.querySelector("transcription")?.textContent || "",
+        rect: {
+          x: Number(rectNode?.getAttribute("x") || 0),
+          y: Number(rectNode?.getAttribute("y") || 0),
+          w: Number(rectNode?.getAttribute("w") || 0),
+          h: Number(rectNode?.getAttribute("h") || 0)
+        },
+        attrs: {},
+        parentAnnoId: a.getAttribute("parentAnnoId") || null
+      };
+      a.querySelectorAll("attrs > attr").forEach((attrNode) => {
+        const key = attrNode.getAttribute("key");
+        const value = attrNode.getAttribute("value") || "";
+        if (key) anno.attrs[key] = value;
+      });
+      image.annotations.push(anno);
+    });
+    images.push(image);
+  });
+
+  const glyphRegistry = Array.from(project.querySelectorAll("glyphRegistry > glyph")).map((g) => normalizeGlyphRegistryItem({
+    id: g.getAttribute("id") || uid("glyph"),
+    glyphChar: g.getAttribute("glyphChar") || "",
+    codepoint: g.getAttribute("codepoint") || "",
+    officialCodepoint: g.getAttribute("officialCodepoint") || "",
+    collected: g.getAttribute("collected") === "true",
+    collectedAt: g.getAttribute("collectedAt") || "",
+    imageId: g.getAttribute("imageId") || "",
+    imageName: g.getAttribute("imageName") || "",
+    annoId: g.getAttribute("annoId") || "",
+    previewDataUrl: g.getAttribute("previewDataUrl") || "",
+    createdAt: g.getAttribute("createdAt") || ""
+  }));
+
+  return {
+    images,
+    templateTags: template.length > 0 ? template : templateDefaults.map((tag, i) => ({ ...tag, order: i + 1 })),
+    selectedImageId: images[0]?.id || null,
+    selectedTemplateTagId: (template[0]?.id || templateDefaults[0]?.id || null),
+    activeMainPanel: "edit",
+    activeRightPanel: "object",
+    glyphRegistry
+  };
+}
+
+async function createBookFromImportedFile(file) {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+  const isXml = file.type.includes("xml") || /\.xml$/i.test(file.name || "");
+  let data;
+  if (isXml) {
+    const text = await file.text();
+    data = parseImportedXmlProject(text);
+  } else if (isPdf) {
+    const images = await buildPdfImageItems(file);
+    data = createDefaultBookData();
+    data.images = images;
+    data.selectedImageId = images[0]?.id || null;
+  } else {
+    const src = await readFileAsDataUrl(file);
+    const image = createUploadedImageItem(file.name, src);
+    data = createDefaultBookData();
+    data.images = [image];
+    data.selectedImageId = image.id;
+  }
+  const bookName = stripFileExt(file.name) || `新建书籍_${Date.now()}`;
+  const id = await createBookRecord(bookName, data);
+  renderBooksList();
+  await openBookById(id);
 }
 
 async function importSelectedFile(file) {
@@ -1644,61 +1963,269 @@ async function importSelectedFile(file) {
   saveState();
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+function collectCurrentBookData() {
+  return {
     images: state.images,
     templateTags: state.templateTags,
     selectedImageId: state.selectedImageId,
     selectedTemplateTagId: state.selectedTemplateTagId,
     activeMainPanel: state.activeMainPanel,
-    activeRightPanel: state.activeRightPanel
-    ,glyphRegistry: state.glyphRegistry
-  }));
+    activeRightPanel: state.activeRightPanel,
+    glyphRegistry: state.glyphRegistry
+  };
 }
 
-function loadState() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.images) && parsed.images.length > 0 && Array.isArray(parsed.templateTags)) {
-        state.images = parsed.images;
-        state.templateTags = parsed.templateTags;
-        state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
-        state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
-        state.activeMainPanel = parsed.activeMainPanel || "edit";
-        state.activeRightPanel = parsed.activeRightPanel || "object";
-        state.glyphRegistry = Array.isArray(parsed.glyphRegistry)
-          ? parsed.glyphRegistry.map((item) => normalizeGlyphRegistryItem(item))
-          : [];
-        state.glyphDraft = null;
-        state.glyphCreateActive = false;
-        ensureTemplateOrder();
-        state.images.forEach((img, idx) => ensureImageMeta(img, idx));
-        return;
-      }
-    } catch (_) {}
-  }
-
-  state.images = seedImages.map((item, idx) => ({
-    id: `seed_${idx + 1}`,
-    name: fileToDisplayName(item.path),
-    src: encodePath(item.path),
-    category: item.category,
-    contentElement: item.element,
-    contentKind: item.kind,
-    meta: { id: `img_${idx + 1}` },
-    annotations: []
-  }));
-  state.templateTags = templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }));
-  ensureTemplateOrder();
-  state.selectedImageId = state.images[0]?.id || null;
-  state.selectedTemplateTagId = state.templateTags[0]?.id || null;
-  state.activeMainPanel = "edit";
-  state.activeRightPanel = "object";
-  state.glyphRegistry = [];
+function applyBookData(parsed) {
+  state.images = Array.isArray(parsed.images) ? parsed.images : [];
+  state.templateTags = Array.isArray(parsed.templateTags) ? parsed.templateTags : [];
+  state.selectedImageId = parsed.selectedImageId || state.images[0]?.id || null;
+  state.selectedTemplateTagId = parsed.selectedTemplateTagId || state.templateTags[0]?.id || null;
+  state.activeMainPanel = parsed.activeMainPanel || "edit";
+  state.activeRightPanel = parsed.activeRightPanel || "object";
+  state.glyphRegistry = Array.isArray(parsed.glyphRegistry)
+    ? parsed.glyphRegistry.map((item) => normalizeGlyphRegistryItem(item))
+    : [];
   state.glyphDraft = null;
   state.glyphCreateActive = false;
+  state.pendingDrafts = [];
+  state.draftRect = null;
+  ensureTemplateOrder();
+  state.images.forEach((img, idx) => ensureImageMeta(img, idx));
+}
+
+function createDefaultBookData() {
+  return {
+    images: [],
+    templateTags: templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 })),
+    selectedImageId: null,
+    selectedTemplateTagId: templateDefaults[0]?.id || null,
+    activeMainPanel: "edit",
+    activeRightPanel: "object",
+    glyphRegistry: []
+  };
+}
+
+async function migrateLocalStorageBooksIfNeeded() {
+  const migrated = await dbGetFlag(STORAGE_MIGRATED_FLAG);
+  if (migrated) return;
+
+  let books = [];
+  try {
+    const rawBooks = localStorage.getItem(BOOKS_INDEX_KEY);
+    books = rawBooks ? JSON.parse(rawBooks) : [];
+    if (!Array.isArray(books)) books = [];
+  } catch (_) {
+    books = [];
+  }
+
+  if (books.length > 0) {
+    for (const book of books) {
+      try {
+        const raw = localStorage.getItem(bookDataKey(book.id));
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        await dbSaveBookData(book.id, parsed);
+      } catch (_) {
+        // ignore one broken record and continue
+      }
+    }
+    booksIndexCache = books.slice();
+    await persistBooksIndex();
+    await dbSetFlag(STORAGE_MIGRATED_FLAG, true);
+    return;
+  }
+
+  const rawLegacy = localStorage.getItem(STORAGE_KEY);
+  if (rawLegacy) {
+    try {
+      const parsed = JSON.parse(rawLegacy);
+      if (Array.isArray(parsed.images) && Array.isArray(parsed.templateTags)) {
+        const bookId = uid("book");
+        const now = new Date().toISOString();
+        booksIndexCache = [{
+          id: bookId,
+          name: "默认书籍",
+          createdAt: now,
+          updatedAt: now,
+          imageCount: parsed.images.length
+        }];
+        await dbSaveBookData(bookId, parsed);
+        await persistBooksIndex();
+      }
+    } catch (_) {
+      // ignore legacy parse errors
+    }
+  }
+  await dbSetFlag(STORAGE_MIGRATED_FLAG, true);
+}
+
+function saveState(options = {}) {
+  if (!currentBookId) return Promise.resolve();
+  const wait = !!options.wait;
+  const payload = collectCurrentBookData();
+  const nextTask = async () => {
+    await dbSaveBookData(currentBookId, payload);
+    const books = loadBooksIndex();
+    const idx = books.findIndex((b) => b.id === currentBookId);
+    if (idx >= 0) {
+      books[idx].updatedAt = new Date().toISOString();
+      books[idx].imageCount = state.images.length;
+      saveBooksIndex(books);
+      await persistBooksIndex();
+    }
+  };
+  saveStateQueue = saveStateQueue.then(nextTask).catch((err) => {
+    reportSaveError(err);
+  });
+  return wait ? saveStateQueue : Promise.resolve();
+}
+
+async function openBookById(bookId) {
+  if (currentBookId && currentBookId !== bookId) {
+    await saveState({ wait: true });
+  }
+  const parsed = await dbLoadBookData(bookId);
+  if (!parsed) {
+    alert("书籍数据不存在");
+    return;
+  }
+  applyBookData(parsed);
+  currentBookId = bookId;
+  showEditorView();
+  renderAll();
+}
+
+async function createBookRecord(name, data) {
+  const books = loadBooksIndex();
+  const bookId = uid("book");
+  const now = new Date().toISOString();
+  books.unshift({
+    id: bookId,
+    name: String(name || `新建书籍_${books.length + 1}`),
+    createdAt: now,
+    updatedAt: now,
+    imageCount: Array.isArray(data.images) ? data.images.length : 0
+  });
+  saveBooksIndex(books);
+  await dbSaveBookData(bookId, data);
+  await persistBooksIndex();
+  return bookId;
+}
+
+async function renameBookRecord(bookId, nextName) {
+  const books = loadBooksIndex();
+  const idx = books.findIndex((item) => item.id === bookId);
+  if (idx < 0) throw new Error("书籍不存在");
+  const normalized = String(nextName || "").trim();
+  if (!normalized) throw new Error("书籍名称不能为空");
+  books[idx].name = normalized;
+  books[idx].updatedAt = new Date().toISOString();
+  saveBooksIndex(books);
+  await persistBooksIndex();
+}
+
+async function deleteBookRecord(bookId) {
+  const books = loadBooksIndex();
+  const nextBooks = books.filter((item) => item.id !== bookId);
+  if (nextBooks.length === books.length) throw new Error("书籍不存在");
+  saveBooksIndex(nextBooks);
+  await dbDeleteBookData(bookId);
+  await persistBooksIndex();
+  if (currentBookId === bookId) {
+    currentBookId = null;
+  }
+}
+
+function renderBooksList() {
+  if (!el.booksList) return;
+  const books = loadBooksIndex();
+  el.booksList.innerHTML = "";
+  if (books.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "book-card";
+    empty.innerHTML = "<div class=\"book-card-title\">暂无书籍</div><div class=\"book-card-meta\">点击右上角“新建”导入图片、PDF 或 XML</div>";
+    el.booksList.appendChild(empty);
+    return;
+  }
+
+  books.forEach((book) => {
+    const card = document.createElement("div");
+    card.className = "book-card";
+    const title = document.createElement("div");
+    title.className = "book-card-title";
+    title.textContent = book.name || "未命名书籍";
+    const meta = document.createElement("div");
+    meta.className = "book-card-meta";
+    meta.textContent = `图片 ${book.imageCount || 0} 张 · 更新于 ${new Date(book.updatedAt || book.createdAt || Date.now()).toLocaleString()}`;
+    const enterBtn = document.createElement("button");
+    enterBtn.type = "button";
+    enterBtn.className = "primary";
+    enterBtn.textContent = "进入书籍";
+    enterBtn.addEventListener("click", () => {
+      openBookById(book.id).catch((err) => {
+        alert(err?.message || "打开书籍失败");
+      });
+    });
+
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "mini-btn";
+    renameBtn.textContent = "重命名";
+    renameBtn.addEventListener("click", async () => {
+      const nextName = window.prompt("输入新的书籍名称", book.name || "");
+      if (nextName == null) return;
+      try {
+        await renameBookRecord(book.id, nextName);
+        renderBooksList();
+      } catch (err) {
+        alert(err?.message || "重命名失败");
+      }
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "mini-btn book-delete-btn";
+    deleteBtn.textContent = "删除";
+    deleteBtn.addEventListener("click", async () => {
+      const ok = window.confirm(`确定删除书籍“${book.name || "未命名书籍"}”吗？删除后不可恢复。`);
+      if (!ok) return;
+      try {
+        await deleteBookRecord(book.id);
+        renderBooksList();
+      } catch (err) {
+        alert(err?.message || "删除失败");
+      }
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "book-card-actions";
+    actions.appendChild(renameBtn);
+    actions.appendChild(deleteBtn);
+
+    card.appendChild(title);
+    card.appendChild(meta);
+    card.appendChild(enterBtn);
+    card.appendChild(actions);
+    el.booksList.appendChild(card);
+  });
+}
+
+async function loadState() {
+  await openStorageDb();
+  booksIndexCache = await dbLoadBooksIndex();
+  await migrateLocalStorageBooksIfNeeded();
+  booksIndexCache = await dbLoadBooksIndex();
+  const books = loadBooksIndex();
+  if (books.length === 0) {
+    const data = createDefaultBookData();
+    applyBookData(data);
+    currentBookId = null;
+    showLibraryView();
+    renderBooksList();
+    return;
+  }
+  showLibraryView();
+  renderBooksList();
 }
 
 function renderThumbs() {
@@ -2636,6 +3163,20 @@ function bindEvents() {
     el.uploadInput.click();
   });
 
+  if (el.newBookBtn && el.libraryImportInput) {
+    el.newBookBtn.addEventListener("click", () => {
+      el.libraryImportInput.click();
+    });
+  }
+
+  if (el.backToLibraryBtn) {
+    el.backToLibraryBtn.addEventListener("click", async () => {
+      await saveState({ wait: true });
+      renderBooksList();
+      showLibraryView();
+    });
+  }
+
   if (el.renameImageBtn) {
     el.renameImageBtn.addEventListener("click", () => {
       if (state.renamingImage) {
@@ -2739,6 +3280,21 @@ function bindEvents() {
   }
 
   bindUploadInput(el.uploadInput);
+
+  if (el.libraryImportInput) {
+    el.libraryImportInput.addEventListener("change", (evt) => {
+      const file = evt.target.files?.[0];
+      if (!file) return;
+      Promise.resolve()
+        .then(async () => {
+          await createBookFromImportedFile(file);
+        })
+        .catch((err) => {
+          alert(err?.message || "新建书籍失败");
+        });
+      evt.target.value = "";
+    });
+  }
 
   el.startDrawBtn.addEventListener("click", () => {
     const activeTag = findTemplateTag(state.activeDraftTagId);
@@ -3105,13 +3661,19 @@ function bindEvents() {
   el.tagMoveDownBtn.addEventListener("click", () => swapSibling(state.selectedTemplateTagId, 1));
 }
 
-loadState();
-bindDrawEvents();
-bindEvents();
-el.mainImage.addEventListener("load", () => {
-  syncDrawLayerSize();
-  renderBoxes();
+async function initApp() {
+  await loadState();
+  bindDrawEvents();
+  bindEvents();
+  el.mainImage.addEventListener("load", () => {
+    syncDrawLayerSize();
+    renderBoxes();
+  });
+  window.addEventListener("resize", syncDrawLayerSize);
+}
+
+initApp().catch((err) => {
+  alert(err?.message || "初始化失败");
 });
-window.addEventListener("resize", syncDrawLayerSize);
 renderColorPreview();
 renderAll();
