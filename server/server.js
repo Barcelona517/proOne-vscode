@@ -353,7 +353,11 @@ app.post("/api/layout/suggest", async (req, res) => {
       .map((item, idx) => `${idx + 1}. ${item.name}${item.path ? ` (${item.path})` : ""}`)
       .join("\\n");
 
-    const prompt = [
+      const hasSent = categories.some((item) => item.name.toLowerCase() === "sent");
+      const hasSnt = categories.some((item) => item.name.toLowerCase() === "snt");
+      const sentenceMode = hasSent || hasSnt;
+
+    const promptLines = [
       "你是古籍版面结构识别助手。",
       "请识别图片中的语义区域，并只使用给定标签分类。",
       "只返回严格 JSON，不要输出任何额外文本。",
@@ -366,7 +370,17 @@ app.post("/api/layout/suggest", async (req, res) => {
       "2) x,y,w,h 为 0~1 的归一化坐标；",
       "3) 只返回明显区域，不要输出太碎的小块；",
       "4) 无法识别时返回 detections 空数组。"
-    ].join("\\n");
+    ];
+
+    if (sentenceMode) {
+      promptLines.push(
+        "5) 若标签包含 sent 或 snt，请启用自动句读：按句子切分，一句一个框，不能跨句；",
+        "6) 句子边界参考。！？；及明显停顿；",
+        "7) 若同时有 sent 与 snt：按阅读顺序交替标注（第一句 sent，第二句 snt，第三句 sent...）。"
+      );
+    }
+
+    const promptText = promptLines.join("\\n");
 
     const response = await arkClient.createResponses({
       model: doubaoModel,
@@ -374,7 +388,7 @@ app.post("/api/layout/suggest", async (req, res) => {
         {
           role: "user",
           content: [
-            { type: "input_text", text: prompt },
+            { type: "input_text", text: promptText },
             { type: "input_image", image_url: imageDataUrl }
           ]
         }
@@ -410,6 +424,20 @@ app.post("/api/layout/suggest", async (req, res) => {
       }))
       .filter((item) => item.w >= 0.003 && item.h >= 0.003 && item.x + item.w <= 1 && item.y + item.h <= 1)
       .slice(0, 100);
+
+    if (hasSent && hasSnt && detections.length > 1) {
+      const sentLike = new Set(["sent", "snt"]);
+      const sentenceDetections = detections.filter((d) => sentLike.has(String(d.tagName || "").toLowerCase()));
+      if (sentenceDetections.length === detections.length) {
+        const sorted = [...detections].sort((a, b) => {
+          if (Math.abs(a.y - b.y) > 0.02) return a.y - b.y;
+          return a.x - b.x;
+        });
+        sorted.forEach((d, i) => {
+          d.tagName = i % 2 === 0 ? "sent" : "snt";
+        });
+      }
+    }
 
     res.json({ detections });
   } catch (err) {

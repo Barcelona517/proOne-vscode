@@ -705,14 +705,27 @@ function getTemplateTagsByDepth(targetDepth) {
   return state.templateTags.filter((tag) => templateDepth(tag.id) === targetDepth);
 }
 
+function getTemplateTagsFromDepth(minDepth) {
+  return state.templateTags.filter((tag) => templateDepth(tag.id) >= minDepth);
+}
+
 function getAutoLayoutTargetTags() {
-  const depth3Tags = getTemplateTagsByDepth(3);
-  return depth3Tags.map((tag) => ({
+  const tags = getTemplateTagsFromDepth(3);
+  const mapped = tags.map((tag) => ({
     id: tag.id,
     name: String(tag.name || "").trim(),
     path: templatePath(tag.id),
     style: getTagStyle(tag) || { shape: "rect", color: "#2e6f86" }
   })).filter((tag) => tag.name);
+
+  const sentLike = mapped.filter((tag) => {
+    const n = tag.name.toLowerCase();
+    return n === "sent" || n === "snt" || n === "sentence";
+  });
+
+  // If sentence-level tags exist, prioritize sentence mode for auto punctuation.
+  if (sentLike.length > 0) return sentLike;
+  return mapped;
 }
 
 async function autoDrawLayoutByAI() {
@@ -723,7 +736,7 @@ async function autoDrawLayoutByAI() {
 
   const targetTags = getAutoLayoutTargetTags();
   if (targetTags.length === 0) {
-    throw new Error("模板树第3层没有可用标签，请先在模板树中配置");
+    throw new Error("模板树第3层及以下没有可用标签，请先在模板树中配置");
   }
 
   const imageDataUrl = captureCurrentImageDataUrl();
@@ -780,7 +793,7 @@ async function autoDrawLayoutByAI() {
   });
 
   if (drafts.length === 0) {
-    throw new Error("识别结果与当前第3层标签不匹配");
+    throw new Error("识别结果与当前第3层及以下标签不匹配");
   }
 
   state.drawingActive = false;
@@ -1516,7 +1529,27 @@ function getParentMap(img) {
 function pickTopAnnoAtPoint(img, x, y) {
   const hits = img.annotations.filter((anno) => pointInRect(anno.rect, x, y));
   if (hits.length === 0) return null;
+
+  const parentMap = getParentMap(img);
+  const hierarchyDepth = new Map();
+  function depthForAnnoId(annoId) {
+    if (!annoId) return 0;
+    if (hierarchyDepth.has(annoId)) return hierarchyDepth.get(annoId);
+    let depth = 1;
+    let cursor = parentMap.get(annoId);
+    const guard = new Set([annoId]);
+    while (cursor && !guard.has(cursor)) {
+      guard.add(cursor);
+      depth += 1;
+      cursor = parentMap.get(cursor);
+    }
+    hierarchyDepth.set(annoId, depth);
+    return depth;
+  }
+
   hits.sort((a, b) => {
+    const annoDepthDiff = depthForAnnoId(b.id) - depthForAnnoId(a.id);
+    if (annoDepthDiff !== 0) return annoDepthDiff;
     const depthDiff = templateDepth(b.tagId) - templateDepth(a.tagId);
     if (depthDiff !== 0) return depthDiff;
     return annoArea(a) - annoArea(b);
