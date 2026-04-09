@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>造字页 - 编码与字样管理</title>
+  <link rel="stylesheet" href="./glyph-maker.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <h1>造字页</h1>
+      <div class="topbar-actions">
+        <a class="btn ghost" href="./index.html">返回标注页</a>
+        <button id="exportBtn" class="btn">导出JSON</button>
+        <label class="btn ghost" for="importInput">导入JSON</label>
+        <input id="importInput" type="file" accept="application/json" class="hidden" />
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card form-card">
+        <h2>新增造字记录</h2>
+
+        <div class="grid-2">
+          <label>字形字符（可选）
+            <input id="glyphChar" type="text" maxlength="4" placeholder="例如：𠮷 或 龘" />
+          </label>
+          <label>指定编码（可选）
+            <input id="manualCodepoint" type="text" placeholder="例如：U+E123" />
+          </label>
+        </div>
+
+        <div class="grid-2">
+          <label>IDS（可选）
+            <input id="ids" type="text" placeholder="例如：⿰氵𡿺" />
+          </label>
+          <label>备注（可选）
+            <input id="note" type="text" placeholder="备注信息" />
+          </label>
+        </div>
+
+        <div class="grid-2">
+          <label>上传字样图片
+            <input id="glyphImage" type="file" accept="image/*" />
+          </label>
+          <div class="image-preview-wrap">
+            <div class="label">预览</div>
+            <img id="imagePreview" class="image-preview" alt="字样预览" />
+          </div>
+        </div>
+
+        <div id="resultBox" class="result-box muted">未分配编码</div>
+
+        <div class="actions">
+          <button id="allocateBtn" class="btn primary">分配并保存</button>
+          <button id="clearBtn" class="btn ghost" type="button">清空输入</button>
+        </div>
+      </section>
+
+      <section class="card list-card">
+        <h2>编码-字样关系</h2>
+        <div class="filters">
+          <input id="searchInput" type="text" placeholder="按字符/编码搜索" />
+          <span id="countText" class="muted"></span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>字符</th>
+                <th>编码</th>
+                <th>类型</th>
+                <th>图片</th>
+                <th>IDS</th>
+                <th>时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="recordTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./glyph-maker.js"></script>
+</body>
+</html>

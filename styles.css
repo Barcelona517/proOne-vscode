@@ -81,11 +81,32 @@ body {
   justify-content: space-between;
 }
 
+.panel-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-switcher {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.main-panel-switcher {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.workspace-panel {
+  display: none;
+}
+
+.workspace-panel.active {
+  display: block;
 }
 
 .switch-btn {
@@ -183,6 +204,22 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
+}
+
+.viewer-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+#viewerTitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#viewerTitleInput {
+  margin-top: 0;
 }
 
 .hint,
@@ -455,6 +492,29 @@ button.primary {
   cursor: pointer;
   font-size: 12px;
   color: var(--muted);
+}
+
+.glyph-captured-preview {
+  width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fff;
+  display: block;
+  margin: 6px 0 10px;
+}
+
+.glyph-captured-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#glyphAutoSuggestBtn {
+  width: auto;
+  margin: 0 0 8px;
 }
 
 .check-line {

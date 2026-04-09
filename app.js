@@ -1,12 +1,7 @@
 ﻿const STORAGE_KEY = "guji_editor_v4";
-const UNICODE_ALLOC_STORAGE_KEY = "guji_unicode_alloc_v1";
-const LOCAL_PUA_START = 0xE000;
-const LOCAL_PUA_END = 0xF8FF;
-const UNICODE_ALLOC_API_CANDIDATES = [
-  "/api/glyph/allocate",
-  "/api/unicode/allocate",
-  "http://localhost:3000/api/glyph/allocate"
-];
+const GLYPH_PUA_START = 0xE000;
+const GLYPH_PUA_END = 0xF8FF;
+const API_BASE = `${window.location.protocol}//${window.location.hostname}:3000`;
 
 const seedImages = [
   { path: "古籍示例/顶格/试验样例-00000002-00008.jpg", category: "顶格", element: "text", kind: "文字" },
@@ -67,13 +62,18 @@ const state = {
   selectedTemplateTagId: null,
   selectedTagFilterName: "",
   drawingActive: false,
+  glyphCreateActive: false,
   draftRect: null,
   pendingDrafts: [],
   activeDraftTagId: null,
+  activeMainPanel: "edit",
   activeRightPanel: "object",
+  glyphDraft: null,
+  glyphRegistry: [],
   propInputs: {},
   draggingThumbId: null,
-  batchDeleteImageIds: []
+  batchDeleteImageIds: [],
+  renamingImage: false
 };
 
 const el = {
@@ -81,6 +81,12 @@ const el = {
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
   viewerTitle: document.getElementById("viewerTitle"),
+  viewerTitleInput: document.getElementById("viewerTitleInput"),
+  renameImageBtn: document.getElementById("renameImageBtn"),
+  mainPanelBtnEdit: document.getElementById("mainPanelBtnEdit"),
+  mainPanelBtnGlyph: document.getElementById("mainPanelBtnGlyph"),
+  sectionEditWorkspace: document.getElementById("sectionEditWorkspace"),
+  sectionGlyphWorkspace: document.getElementById("sectionGlyphWorkspace"),
   panelBtnObject: document.getElementById("panelBtnObject"),
   panelBtnDraw: document.getElementById("panelBtnDraw"),
   panelBtnTags: document.getElementById("panelBtnTags"),
@@ -92,13 +98,23 @@ const el = {
   propNote: document.getElementById("propNote"),
   unicodeAllocArea: document.getElementById("unicodeAllocArea"),
   propCodepoint: document.getElementById("propCodepoint"),
-  allocateUnicodeBtn: document.getElementById("allocateUnicodeBtn"),
   unicodeHint: document.getElementById("unicodeHint"),
   saveCurrentPropsBtn: document.getElementById("saveCurrentPropsBtn"),
   editModeArea: document.getElementById("editModeArea"),
   drawState: document.getElementById("drawState"),
   startDrawBtn: document.getElementById("startDrawBtn"),
   clearDraftBtn: document.getElementById("clearDraftBtn"),
+  glyphCharInput: document.getElementById("glyphCharInput"),
+  glyphManualCodepointInput: document.getElementById("glyphManualCodepointInput"),
+  glyphIdsInput: document.getElementById("glyphIdsInput"),
+  glyphNoteInput: document.getElementById("glyphNoteInput"),
+  glyphAutoSuggestBtn: document.getElementById("glyphAutoSuggestBtn"),
+  glyphStartCreateBtn: document.getElementById("glyphStartCreateBtn"),
+  glyphReselectBtn: document.getElementById("glyphReselectBtn"),
+  glyphAssignSaveBtn: document.getElementById("glyphAssignSaveBtn"),
+  glyphCreateHint: document.getElementById("glyphCreateHint"),
+  glyphCapturedPreview: document.getElementById("glyphCapturedPreview"),
+  glyphRecentList: document.getElementById("glyphRecentList"),
   annoShapeSelect: document.getElementById("annoShapeSelect"),
   annoColor: document.getElementById("annoColor"),
   annoColorPreview: document.getElementById("annoColorPreview"),
@@ -110,7 +126,9 @@ const el = {
   draftTagAttrs: document.getElementById("draftTagAttrs"),
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
+  autoDrawByAiBtn: document.getElementById("autoDrawByAiBtn"),
   annoTranscription: document.getElementById("annoTranscription"),
+  annoAutoSuggestBtn: document.getElementById("annoAutoSuggestBtn"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
   templateTreeArea: document.getElementById("templateTreeArea"),
@@ -124,6 +142,7 @@ const el = {
   templateAttrSelect: document.getElementById("templateAttrSelect"),
   deleteAttrBtn: document.getElementById("deleteAttrBtn"),
   deleteSelectedImagesBtn: document.getElementById("deleteSelectedImagesBtn"),
+  exportXmlBtn: document.getElementById("exportXmlBtn"),
   uploadInput: document.getElementById("uploadInput"),
   uploadBtn: document.getElementById("uploadBtn")
 };
@@ -214,6 +233,511 @@ function ensureImageMeta(img, idx) {
 function setIfNotEmpty(obj, key, value) {
   const trimmed = (value || "").trim();
   if (trimmed) obj[key] = trimmed;
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function numToXml(value) {
+  if (!Number.isFinite(value)) return "0";
+  return Number(value.toFixed(6)).toString();
+}
+
+function timestampForFileName() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+function buildTemplateXml(lines, parentId, indent) {
+  const children = templateChildren(parentId);
+  children.forEach((tag) => {
+    const tagAttrs = [
+      `id="${escapeXml(tag.id || "")}"`,
+      `name="${escapeXml(tag.name || "")}"`,
+      `order="${escapeXml(String(tag.order || 0))}"`
+    ];
+    if (tag.parentId) tagAttrs.push(`parentId="${escapeXml(tag.parentId)}"`);
+    const attrsText = (tag.attrs || []).join(",");
+    if (attrsText) tagAttrs.push(`attrs="${escapeXml(attrsText)}"`);
+    if (tag.style?.shape) tagAttrs.push(`shape="${escapeXml(tag.style.shape)}"`);
+    if (tag.style?.color) tagAttrs.push(`color="${escapeXml(tag.style.color)}"`);
+
+    lines.push(`${indent}<tag ${tagAttrs.join(" ")}>`);
+    buildTemplateXml(lines, tag.id, `${indent}  `);
+    lines.push(`${indent}</tag>`);
+  });
+}
+
+function buildProjectXml() {
+  const totalAnnotations = state.images.reduce((sum, img) => sum + (img.annotations?.length || 0), 0);
+  const lines = [];
+  lines.push("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+  lines.push(`<gujiProject schemaVersion="1.0" exportedAt="${escapeXml(new Date().toISOString())}">`);
+  lines.push(`  <summary imageCount="${state.images.length}" annotationCount="${totalAnnotations}" templateTagCount="${state.templateTags.length}" glyphCount="${state.glyphRegistry.length}"/>`);
+
+  lines.push("  <template>");
+  buildTemplateXml(lines, null, "    ");
+  lines.push("  </template>");
+
+  lines.push("  <images>");
+  state.images.forEach((img, imageIndex) => {
+    const imageAttrs = [
+      `id="${escapeXml(img.id || "")}"`,
+      `name="${escapeXml(img.name || "")}"`,
+      `index="${imageIndex + 1}"`,
+      `category="${escapeXml(img.category || "")}"`,
+      `contentElement="${escapeXml(img.contentElement || "")}"`,
+      `contentKind="${escapeXml(img.contentKind || "")}"`
+    ];
+    if (img.src) imageAttrs.push(`src="${escapeXml(img.src)}"`);
+    lines.push(`    <image ${imageAttrs.join(" ")}>`);
+
+    const metaEntries = Object.entries(img.meta || {});
+    if (metaEntries.length > 0) {
+      lines.push("      <meta>");
+      metaEntries.forEach(([key, value]) => {
+        lines.push(`        <field name="${escapeXml(key)}" value="${escapeXml(String(value || ""))}"/>`);
+      });
+      lines.push("      </meta>");
+    }
+
+    lines.push("      <annotations>");
+    (img.annotations || []).forEach((anno, annoIndex) => {
+      const annoAttrs = [
+        `id="${escapeXml(anno.id || "")}"`,
+        `index="${annoIndex + 1}"`,
+        `tagId="${escapeXml(anno.tagId || "")}"`,
+        `tagName="${escapeXml(anno.tagName || "")}"`,
+        `tagPath="${escapeXml(anno.tagPath || "")}"`,
+        `shape="${escapeXml(anno.shape || "rect")}"`,
+        `color="${escapeXml(anno.color || "")}"`
+      ];
+      if (anno.parentAnnoId) annoAttrs.push(`parentAnnoId="${escapeXml(anno.parentAnnoId)}"`);
+      lines.push(`        <annotation ${annoAttrs.join(" ")}>`);
+      lines.push(`          <rect x="${numToXml(anno.rect?.x || 0)}" y="${numToXml(anno.rect?.y || 0)}" w="${numToXml(anno.rect?.w || 0)}" h="${numToXml(anno.rect?.h || 0)}"/>`);
+      lines.push(`          <transcription>${escapeXml(anno.transcription || "")}</transcription>`);
+
+      const annoAttrEntries = Object.entries(anno.attrs || {});
+      if (annoAttrEntries.length > 0) {
+        lines.push("          <attrs>");
+        annoAttrEntries.forEach(([key, value]) => {
+          lines.push(`            <attr key="${escapeXml(key)}" value="${escapeXml(String(value || ""))}"/>`);
+        });
+        lines.push("          </attrs>");
+      }
+      lines.push("        </annotation>");
+    });
+    lines.push("      </annotations>");
+    lines.push("    </image>");
+  });
+  lines.push("  </images>");
+
+  lines.push("  <glyphRegistry>");
+  state.glyphRegistry.forEach((item, index) => {
+    const attrs = [
+      `id="${escapeXml(item.id || "")}"`,
+      `index="${index + 1}"`,
+      `glyphChar="${escapeXml(item.glyphChar || "")}"`,
+      `codepoint="${escapeXml(item.codepoint || "")}"`,
+      `imageId="${escapeXml(item.imageId || "")}"`,
+      `imageName="${escapeXml(item.imageName || "")}"`,
+      `annoId="${escapeXml(item.annoId || "")}"`
+    ];
+    if (item.createdAt) attrs.push(`createdAt="${escapeXml(item.createdAt)}"`);
+    if (item.previewDataUrl) attrs.push(`previewDataUrl="${escapeXml(item.previewDataUrl)}"`);
+    lines.push(`    <glyph ${attrs.join(" ")}/>`);
+  });
+  lines.push("  </glyphRegistry>");
+
+  lines.push("</gujiProject>");
+  return lines.join("\n");
+}
+
+function exportProjectAsXml() {
+  const xml = buildProjectXml();
+  const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `guji_export_${timestampForFileName()}.xml`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function normalizeCodepointInput(input) {
+  const raw = String(input || "").trim().toUpperCase();
+  if (!raw) return "";
+  const hex = raw.startsWith("U+") ? raw.slice(2) : raw;
+  if (!/^[0-9A-F]{4,6}$/.test(hex)) {
+    throw new Error("unicode格式错误，应为 U+XXXX 到 U+XXXXXX");
+  }
+  return `U+${hex}`;
+}
+
+function cpIntToUPlus(value) {
+  return `U+${value.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+function codepointFromSingleChar(ch) {
+  const text = String(ch || "").trim();
+  const arr = [...text];
+  if (arr.length !== 1) return "";
+  const cp = arr[0].codePointAt(0);
+  if (!cp) return "";
+  return `U+${cp.toString(16).toUpperCase()}`;
+}
+
+function usedCodepointSet() {
+  const used = new Set();
+  state.images.forEach((img) => {
+    img.annotations.forEach((anno) => {
+      const cp = (anno.attrs?.codepoint || "").trim().toUpperCase();
+      if (cp) used.add(cp);
+    });
+  });
+  state.glyphRegistry.forEach((item) => {
+    const cp = String(item.codepoint || "").trim().toUpperCase();
+    if (cp) used.add(cp);
+  });
+  return used;
+}
+
+function isPuaCodepoint(cp) {
+  const normalized = normalizeCodepointInput(cp);
+  const value = Number.parseInt(normalized.slice(2), 16);
+  return value >= GLYPH_PUA_START && value <= GLYPH_PUA_END;
+}
+
+function allocateGlyphCodepoint(glyphChar, manualCodepoint) {
+  const used = usedCodepointSet();
+  const manual = normalizeCodepointInput(manualCodepoint);
+  if (manual) {
+    if (used.has(manual)) throw new Error(`unicode已存在：${manual}`);
+    return manual;
+  }
+
+  const official = codepointFromSingleChar(glyphChar);
+  if (official && !isPuaCodepoint(official)) {
+    if (used.has(official)) throw new Error(`unicode已存在：${official}`);
+    return official;
+  }
+
+  for (let cp = GLYPH_PUA_START; cp <= GLYPH_PUA_END; cp += 1) {
+    const candidate = cpIntToUPlus(cp);
+    if (!used.has(candidate)) return candidate;
+  }
+  throw new Error("PUA编码池已满，无法分配");
+}
+
+function ensureCharTemplateTag() {
+  let charTag = state.templateTags.find((tag) => (tag.name || "").trim().toLowerCase() === "char") || null;
+  if (charTag) return charTag;
+
+  const contentTag = state.templateTags.find((tag) => (tag.name || "").trim().toLowerCase() === "content") || null;
+  const parentId = contentTag ? contentTag.id : null;
+  charTag = {
+    id: uid("tag"),
+    name: "char",
+    parentId,
+    attrs: ["id"],
+    order: templateChildren(parentId).length + 1,
+    style: { shape: "rect", color: "#8f3b2e" }
+  };
+  state.templateTags.push(charTag);
+  ensureTemplateOrder();
+  return charTag;
+}
+
+function cropRectToDataUrl(rect) {
+  if (!el.mainImage || !el.mainImage.naturalWidth || !el.mainImage.naturalHeight) return "";
+  const sx = Math.max(0, Math.floor(rect.x * el.mainImage.naturalWidth));
+  const sy = Math.max(0, Math.floor(rect.y * el.mainImage.naturalHeight));
+  const sw = Math.max(1, Math.floor(rect.w * el.mainImage.naturalWidth));
+  const sh = Math.max(1, Math.floor(rect.h * el.mainImage.naturalHeight));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = sw;
+  canvas.height = sh;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.drawImage(el.mainImage, sx, sy, sw, sh, 0, 0, sw, sh);
+  return canvas.toDataURL("image/png");
+}
+
+function captureCurrentImageDataUrl(maxSide = 1600) {
+  if (!el.mainImage || !el.mainImage.naturalWidth || !el.mainImage.naturalHeight) return "";
+  const srcW = el.mainImage.naturalWidth;
+  const srcH = el.mainImage.naturalHeight;
+  const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+  const outW = Math.max(1, Math.round(srcW * scale));
+  const outH = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.drawImage(el.mainImage, 0, 0, srcW, srcH, 0, 0, outW, outH);
+  return canvas.toDataURL("image/png");
+}
+
+function getTemplateTagsByDepth(targetDepth) {
+  return state.templateTags.filter((tag) => templateDepth(tag.id) === targetDepth);
+}
+
+function getAutoLayoutTargetTags() {
+  const depth3Tags = getTemplateTagsByDepth(3);
+  return depth3Tags.map((tag) => ({
+    id: tag.id,
+    name: String(tag.name || "").trim(),
+    path: templatePath(tag.id),
+    style: getTagStyle(tag) || { shape: "rect", color: "#2e6f86" }
+  })).filter((tag) => tag.name);
+}
+
+async function autoDrawLayoutByAI() {
+  const img = selectedImage();
+  if (!img) {
+    throw new Error("请先选择图片");
+  }
+
+  const targetTags = getAutoLayoutTargetTags();
+  if (targetTags.length === 0) {
+    throw new Error("模板树第3层没有可用标签，请先在模板树中配置");
+  }
+
+  const imageDataUrl = captureCurrentImageDataUrl();
+  if (!imageDataUrl) {
+    throw new Error("无法读取当前图片，请稍后重试");
+  }
+
+  const payload = {
+    imageDataUrl,
+    categories: targetTags.map((tag) => ({ name: tag.name, path: tag.path }))
+  };
+
+  const res = await fetch(`${API_BASE}/api/layout/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || "自动画框失败");
+  }
+
+  const data = await res.json();
+  const detections = Array.isArray(data?.detections) ? data.detections : [];
+  if (detections.length === 0) {
+    throw new Error("未识别到可用区域");
+  }
+
+  const byName = new Map(targetTags.map((tag) => [tag.name.toLowerCase(), tag]));
+  const drafts = [];
+
+  detections.forEach((item) => {
+    const tagName = String(item?.tagName || "").trim();
+    const matched = byName.get(tagName.toLowerCase());
+    if (!matched) return;
+
+    const x = clamp01(Number(item?.x));
+    const y = clamp01(Number(item?.y));
+    const w = clamp01(Number(item?.w));
+    const h = clamp01(Number(item?.h));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return;
+    if (w < 0.003 || h < 0.003) return;
+    if (x + w > 1 || y + h > 1) return;
+
+    drafts.push({
+      rect: { x, y, w, h },
+      tagId: matched.id,
+      tagName: matched.name,
+      tagPath: matched.path,
+      shape: matched.style.shape || "rect",
+      color: matched.style.color || "#2e6f86"
+    });
+  });
+
+  if (drafts.length === 0) {
+    throw new Error("识别结果与当前第3层标签不匹配");
+  }
+
+  state.drawingActive = false;
+  state.glyphCreateActive = false;
+  state.draftRect = null;
+  state.pendingDrafts = drafts;
+}
+
+function captureGlyphDraft(rect) {
+  const img = selectedImage();
+  if (!img) throw new Error("请先选择图片");
+  state.glyphDraft = {
+    imageId: img.id,
+    imageName: img.name,
+    rect: { ...rect },
+    previewDataUrl: cropRectToDataUrl(rect),
+    capturedAt: new Date().toISOString()
+  };
+}
+
+function createGlyphAnnoFromDraft() {
+  const img = selectedImage();
+  if (!img) throw new Error("请先选择图片");
+  if (!state.glyphDraft) throw new Error("请先点击“造字”并框选图片中的一个字");
+  if (state.glyphDraft.imageId !== img.id) throw new Error("请切回框选时的图片后再保存造字");
+
+  const rect = { ...state.glyphDraft.rect };
+  const glyphChar = (el.glyphCharInput?.value || "").trim();
+
+  const codepoint = allocateGlyphCodepoint(glyphChar, el.glyphManualCodepointInput?.value || "");
+  const charTag = ensureCharTemplateTag();
+  const style = getTagStyle(charTag) || { shape: "rect", color: "#8f3b2e" };
+  if (!getTagStyle(charTag)) syncStyleToTag(charTag.id, style.shape, style.color);
+
+  const anno = {
+    id: uid("anno"),
+    tagId: charTag.id,
+    tagName: charTag.name,
+    tagPath: templatePath(charTag.id),
+    shape: "rect",
+    color: style.color,
+    transcription: glyphChar || "",
+    rect: { ...rect },
+    attrs: {
+      codepoint,
+      glyphChar,
+      glyphIds: (el.glyphIdsInput?.value || "").trim(),
+      glyphNote: (el.glyphNoteInput?.value || "").trim(),
+      glyphImageName: state.glyphDraft.imageName,
+      glyphCropDataUrl: state.glyphDraft.previewDataUrl || ""
+    },
+    parentAnnoId: null
+  };
+
+  const idValue = (anno.attrs.id || "").trim();
+  anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
+  img.annotations.push(anno);
+
+  state.selectedAnnoId = anno.id;
+  state.glyphRegistry.unshift({
+    id: uid("glyph"),
+    glyphChar: glyphChar || "(未录字符)",
+    codepoint,
+    imageId: img.id,
+    imageName: img.name,
+    previewDataUrl: state.glyphDraft.previewDataUrl || "",
+    annoId: anno.id,
+    createdAt: new Date().toISOString()
+  });
+  state.glyphRegistry = state.glyphRegistry.slice(0, 200);
+
+  state.glyphDraft = null;
+}
+
+async function suggestGlyphByAI() {
+  if (!state.glyphDraft?.previewDataUrl) {
+    throw new Error("请先框选字图后再自动识别");
+  }
+
+  const payload = {
+    imageDataUrl: state.glyphDraft.previewDataUrl,
+    imageName: state.glyphDraft.imageName,
+    existing: state.glyphRegistry.slice(0, 200).map((it) => ({
+      glyphChar: it.glyphChar,
+      codepoint: it.codepoint
+    }))
+  };
+
+  const res = await fetch(`${API_BASE}/api/glyphs/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || "AI识别服务不可用");
+  }
+
+  const data = await res.json();
+  const suggestion = data?.suggestion || data || {};
+
+  if (suggestion.glyphChar && el.glyphCharInput) {
+    el.glyphCharInput.value = suggestion.glyphChar;
+  }
+  if (suggestion.codepoint && el.glyphManualCodepointInput) {
+    el.glyphManualCodepointInput.value = suggestion.codepoint;
+  }
+  if (suggestion.ids && el.glyphIdsInput) {
+    el.glyphIdsInput.value = suggestion.ids;
+  }
+
+  const confidence = suggestion.confidence != null ? ` 置信度:${Number(suggestion.confidence).toFixed(2)}` : "";
+  if (el.glyphCreateHint) {
+    if (suggestion.exists) {
+      const cp = suggestion.codepoint || "";
+      const ids = suggestion.ids || "";
+      if (el.glyphManualCodepointInput) el.glyphManualCodepointInput.value = cp;
+      if (el.glyphIdsInput) el.glyphIdsInput.value = ids;
+      alert(`该字已被收录。\nunicode: ${cp || "(空)"}\nIDS: ${ids || "(空)"}`);
+    } else {
+      if (confidence) {
+        el.glyphCreateHint.textContent = `建议已填入 unicode/IDS。${confidence}`;
+      }
+    }
+  }
+}
+
+function getTranscriptionTargetRect() {
+  if (state.draftRect) return { ...state.draftRect };
+  if (state.pendingDrafts.length > 0) return { ...state.pendingDrafts[0].rect };
+  const anno = selectedAnno();
+  if (anno?.rect) return { ...anno.rect };
+  return null;
+}
+
+async function suggestTranscriptionByAI() {
+  const rect = getTranscriptionTargetRect();
+  if (!rect) {
+    throw new Error("请先框选一个区域后再识别简体");
+  }
+
+  const imageDataUrl = cropRectToDataUrl(rect);
+  if (!imageDataUrl) {
+    throw new Error("无法获取框选字图");
+  }
+
+  const payload = { imageDataUrl };
+  const res = await fetch(`${API_BASE}/api/transcription/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || "AI识别服务不可用");
+  }
+
+  const data = await res.json();
+  const suggestion = data?.suggestion || data || {};
+  const transcription = String(suggestion.transcription || "").trim();
+  if (!transcription) {
+    throw new Error("AI未识别出简体结果，请手动填写");
+  }
+  if (el.annoTranscription) {
+    el.annoTranscription.value = transcription;
+  }
 }
 
 const TRADITIONAL_PHRASE_MAP = {
@@ -357,69 +881,7 @@ function convertTraditionalToSimplified(text) {
 
 function setUnicodeHint(message) {
   if (!el.unicodeHint) return;
-  el.unicodeHint.textContent = message || "选中框后可为未收录字分配编码";
-}
-
-function cpToUPlus(cp) {
-  return `U+${cp.toString(16).toUpperCase()}`;
-}
-
-function parseJsonSafely(raw, fallback) {
-  try {
-    return JSON.parse(raw);
-  } catch (_) {
-    return fallback;
-  }
-}
-
-function isPuaChar(ch) {
-  const cp = ch.codePointAt(0);
-  return (cp >= 0xE000 && cp <= 0xF8FF) || (cp >= 0xF0000 && cp <= 0xFFFFD) || (cp >= 0x100000 && cp <= 0x10FFFD);
-}
-
-function isCjkUnifiedChar(ch) {
-  const cp = ch.codePointAt(0);
-  return (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xF900 && cp <= 0xFAFF);
-}
-
-function isVariationSelector(ch) {
-  const cp = ch.codePointAt(0);
-  return (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF);
-}
-
-function isIgnorableForSingleGlyphCheck(ch) {
-  if (!ch) return true;
-  if (/\s/.test(ch)) return true;
-  if (isVariationSelector(ch)) return true;
-  return /[，。、；：？！,.!?:;'"“”‘’（）()【】\[\]《》<>「」『』—…·\-_\/\\]/.test(ch);
-}
-
-function analyzeSingleGlyphText(text) {
-  const glyphs = [];
-  let hasOtherVisibleChar = false;
-
-  [...(text || "")].forEach((ch) => {
-    if (isIgnorableForSingleGlyphCheck(ch)) return;
-    if (isPuaChar(ch) || isCjkUnifiedChar(ch)) {
-      glyphs.push(ch);
-      return;
-    }
-    hasOtherVisibleChar = true;
-  });
-
-  return {
-    glyphs,
-    isSingle: glyphs.length === 1 && !hasOtherVisibleChar
-  };
-}
-
-function pickPrimaryGlyphChar(text) {
-  const analyzed = analyzeSingleGlyphText(text);
-  return analyzed.glyphs[0] || "";
-}
-
-function extractGlyphChars(text) {
-  return analyzeSingleGlyphText(text).glyphs;
+  el.unicodeHint.textContent = message || "仅 char 标签显示 unicode 码";
 }
 
 function isCharTagAnno(anno) {
@@ -432,139 +894,52 @@ function isCharTagAnno(anno) {
   return parts[parts.length - 1] === "char";
 }
 
-function detectCollectedUnicodeForAnno(anno) {
-  const text = (anno?.transcription || "").trim();
-  const ch = pickPrimaryGlyphChar(text);
-  if (!ch) {
-    throw new Error("当前框“简体形式”中没有可识别字符");
-  }
+function renderMainPanelTabs() {
+  const active = state.activeMainPanel === "glyph" ? "glyph" : "edit";
+  state.activeMainPanel = active;
+  if (!el.mainPanelBtnEdit || !el.mainPanelBtnGlyph) return;
 
-  const allocMap = parseJsonSafely(anno?.attrs?.codepointMap || "{}", {});
-  if (allocMap[ch]) {
-    return { char: ch, collected: true, codepoint: allocMap[ch], source: "mapped" };
-  }
-
-  if (isPuaChar(ch)) {
-    return { char: ch, collected: false, codepoint: null, source: "pua" };
-  }
-
-  if (isCjkUnifiedChar(ch)) {
-    return { char: ch, collected: true, codepoint: cpToUPlus(ch.codePointAt(0)), source: "cjk" };
-  }
-
-  return { char: ch, collected: false, codepoint: null, source: "other" };
+  el.mainPanelBtnEdit.classList.toggle("active", active === "edit");
+  el.mainPanelBtnGlyph.classList.toggle("active", active === "glyph");
+  if (el.sectionEditWorkspace) el.sectionEditWorkspace.classList.toggle("active", active === "edit");
+  if (el.sectionGlyphWorkspace) el.sectionGlyphWorkspace.classList.toggle("active", active === "glyph");
 }
 
-function getUnallocatedRareChars(anno) {
-  const text = (anno?.transcription || "").trim();
-  if (!text) return [];
-  const map = parseJsonSafely(anno?.attrs?.codepointMap || "{}", {});
-  return [...new Set([...text].filter((ch) => isPuaChar(ch) && !map[ch]))];
-}
+function renderGlyphPanel() {
+  if (!el.glyphCreateHint || !el.glyphRecentList) return;
+  el.glyphCreateHint.textContent = state.glyphCreateActive
+    ? "造字模式已开启：请在中间图片上拖拽框选"
+    : (state.glyphDraft ? "已框选字图，请分配并保存造字" : "未进入造字框选模式");
 
-function getLocalAllocStore() {
-  const raw = localStorage.getItem(UNICODE_ALLOC_STORAGE_KEY);
-  const parsed = parseJsonSafely(raw, null);
-  if (!parsed || typeof parsed !== "object") {
-    return { charToCodepoint: {}, nextCp: LOCAL_PUA_START };
+  if (el.glyphStartCreateBtn) {
+    el.glyphStartCreateBtn.textContent = state.glyphCreateActive ? "造字中" : "开始造字";
   }
-  parsed.charToCodepoint = parsed.charToCodepoint || {};
-  if (!Number.isInteger(parsed.nextCp)) parsed.nextCp = LOCAL_PUA_START;
-  return parsed;
-}
 
-function saveLocalAllocStore(store) {
-  localStorage.setItem(UNICODE_ALLOC_STORAGE_KEY, JSON.stringify(store));
-}
-
-function allocateLocalPuaForChar(ch) {
-  const store = getLocalAllocStore();
-  const existing = store.charToCodepoint[ch];
-  if (existing) return { codepoint: existing, allocatedFrom: "local-cache" };
-
-  let cp = store.nextCp;
-  while (cp <= LOCAL_PUA_END) {
-    const candidate = cpToUPlus(cp);
-    const used = Object.values(store.charToCodepoint).includes(candidate);
-    if (!used) {
-      store.charToCodepoint[ch] = candidate;
-      store.nextCp = cp + 1;
-      saveLocalAllocStore(store);
-      return { codepoint: candidate, allocatedFrom: "local-pua" };
-    }
-    cp += 1;
-  }
-  throw new Error("本地 PUA 编码池已耗尽");
-}
-
-async function tryAllocateFromApi(ch, anno) {
-  const img = selectedImage();
-  for (const url of UNICODE_ALLOC_API_CANDIDATES) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          glyph: ch,
-          normalizedKey: `char-${ch.codePointAt(0).toString(16)}`,
-          ids: anno.attrs?.ids || null,
-          radicalId: Number.parseInt(anno.attrs?.radicalId || "", 10) || 1,
-          pronunciation: anno.attrs?.pronunciation || null,
-          sourcePage: img?.name || null,
-          confidenceScore: 0.6
-        })
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const cp = data?.codepoint || data?.allocated_cp || data?.ucode || null;
-      if (cp && /^U\+[0-9A-Fa-f]+$/.test(cp)) {
-        return { codepoint: cp.toUpperCase(), allocatedFrom: data?.allocated_from || "api" };
-      }
-    } catch (_) {
-      // Try next candidate endpoint.
+  if (el.glyphCapturedPreview) {
+    if (state.glyphDraft?.previewDataUrl) {
+      el.glyphCapturedPreview.src = state.glyphDraft.previewDataUrl;
+      el.glyphCapturedPreview.style.display = "block";
+    } else {
+      el.glyphCapturedPreview.removeAttribute("src");
+      el.glyphCapturedPreview.style.display = "none";
     }
   }
-  return null;
-}
 
-async function allocateUnicodeForCurrentAnno(forceTargets = []) {
-  const anno = selectedAnno();
-  if (!anno) throw new Error("请先选中一个已保存框");
-
-  const text = (anno.transcription || "").trim();
-  if (!text) throw new Error("当前框“简体形式”为空，无法分配编码");
-
-  const targets = forceTargets.length > 0
-    ? [...new Set(forceTargets)]
-    : [...new Set([...text].filter((ch) => isPuaChar(ch)))];
-  if (targets.length === 0) {
-    throw new Error("当前框没有未收录字（PUA字符），无需分配");
+  el.glyphRecentList.innerHTML = "";
+  const ul = document.createElement("ul");
+  const recent = state.glyphRegistry.slice(0, 8);
+  if (recent.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "暂无造字记录";
+    ul.appendChild(li);
+  } else {
+    recent.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = `${item.glyphChar} -> ${item.codepoint} (${item.imageName})`;
+      ul.appendChild(li);
+    });
   }
-
-  const allocMap = parseJsonSafely(anno.attrs?.codepointMap || "{}", {});
-  const sourceMap = parseJsonSafely(anno.attrs?.codepointSourceMap || "{}", {});
-  const forceSet = new Set(forceTargets);
-
-  for (const ch of targets) {
-    if (allocMap[ch] && !forceSet.has(ch)) continue;
-    const apiAllocated = await tryAllocateFromApi(ch, anno);
-    if (apiAllocated) {
-      allocMap[ch] = apiAllocated.codepoint;
-      sourceMap[ch] = apiAllocated.allocatedFrom;
-      continue;
-    }
-    const localAllocated = allocateLocalPuaForChar(ch);
-    allocMap[ch] = localAllocated.codepoint;
-    sourceMap[ch] = localAllocated.allocatedFrom;
-  }
-
-  anno.attrs = anno.attrs || {};
-  anno.attrs.codepointMap = JSON.stringify(allocMap);
-  anno.attrs.codepointSourceMap = JSON.stringify(sourceMap);
-  anno.attrs.codepoint = allocMap[targets[0]] || "";
-
-  const summary = targets.map((ch) => `${ch}:${allocMap[ch]}`).join("; ");
-  return summary;
+  el.glyphRecentList.appendChild(ul);
 }
 
 function renderRightPanelTabs() {
@@ -711,7 +1086,9 @@ function saveState() {
     templateTags: state.templateTags,
     selectedImageId: state.selectedImageId,
     selectedTemplateTagId: state.selectedTemplateTagId,
+    activeMainPanel: state.activeMainPanel,
     activeRightPanel: state.activeRightPanel
+    ,glyphRegistry: state.glyphRegistry
   }));
 }
 
@@ -725,7 +1102,11 @@ function loadState() {
         state.templateTags = parsed.templateTags;
         state.selectedImageId = parsed.selectedImageId || parsed.images[0].id;
         state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
+        state.activeMainPanel = parsed.activeMainPanel || "edit";
         state.activeRightPanel = parsed.activeRightPanel || "object";
+        state.glyphRegistry = Array.isArray(parsed.glyphRegistry) ? parsed.glyphRegistry : [];
+        state.glyphDraft = null;
+        state.glyphCreateActive = false;
         ensureTemplateOrder();
         state.images.forEach((img, idx) => ensureImageMeta(img, idx));
         return;
@@ -747,7 +1128,11 @@ function loadState() {
   ensureTemplateOrder();
   state.selectedImageId = state.images[0]?.id || null;
   state.selectedTemplateTagId = state.templateTags[0]?.id || null;
+  state.activeMainPanel = "edit";
   state.activeRightPanel = "object";
+  state.glyphRegistry = [];
+  state.glyphDraft = null;
+  state.glyphCreateActive = false;
 }
 
 function renderThumbs() {
@@ -761,7 +1146,6 @@ function renderThumbs() {
     card.innerHTML = `
       <div class="thumb-head">
         <label class="thumb-select"><input type="checkbox" data-select-id="${img.id}" ${selectedForDelete.has(img.id) ? "checked" : ""} />选中</label>
-        <button class="thumb-delete-btn" data-id="${img.id}">删除</button>
       </div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
@@ -814,6 +1198,7 @@ function renderThumbs() {
       state.selectedTagFilterName = "";
       state.drawingActive = false;
       state.draftRect = null;
+      state.renamingImage = false;
       renderAll();
     });
 
@@ -829,22 +1214,6 @@ function renderThumbs() {
       }
     });
 
-    card.querySelector("button[data-id]").addEventListener("click", (evt) => {
-      evt.stopPropagation();
-      if (state.images.length <= 1) {
-        alert("至少保留一张图片");
-        return;
-      }
-      if (!window.confirm(`确定删除图片：${img.name}?`)) return;
-      state.images = state.images.filter((it) => it.id !== img.id);
-      state.batchDeleteImageIds = state.batchDeleteImageIds.filter((id) => id !== img.id);
-      if (state.selectedImageId === img.id) state.selectedImageId = state.images[0]?.id || null;
-      state.selectedAnnoId = null;
-      state.selectedTagFilterName = "";
-      renderAll();
-      saveState();
-    });
-
     el.thumbList.appendChild(card);
   });
 }
@@ -852,16 +1221,81 @@ function renderThumbs() {
 function renderMainImage() {
   const img = selectedImage();
   if (!img) {
+    state.renamingImage = false;
     el.mainImage.removeAttribute("src");
     el.viewerTitle.textContent = "未选择图片";
+    if (el.viewerTitle) el.viewerTitle.classList.remove("hidden");
+    if (el.viewerTitleInput) el.viewerTitleInput.classList.add("hidden");
+    if (el.renameImageBtn) el.renameImageBtn.disabled = true;
     syncDrawLayerSize();
     return;
   }
   if (el.mainImage.src !== img.src) {
     el.mainImage.src = img.src;
   }
-  el.viewerTitle.textContent = `${img.name} | id:${img.meta.id}`;
+  if (state.renamingImage) {
+    if (el.viewerTitle) el.viewerTitle.classList.add("hidden");
+    if (el.viewerTitleInput) {
+      el.viewerTitleInput.classList.remove("hidden");
+      if (document.activeElement !== el.viewerTitleInput) {
+        el.viewerTitleInput.value = img.name || "";
+      }
+    }
+    if (el.renameImageBtn) {
+      el.renameImageBtn.disabled = false;
+      el.renameImageBtn.textContent = "保存";
+    }
+  } else {
+    el.viewerTitle.textContent = `${img.name} | id:${img.meta.id}`;
+    if (el.viewerTitle) el.viewerTitle.classList.remove("hidden");
+    if (el.viewerTitleInput) el.viewerTitleInput.classList.add("hidden");
+    if (el.renameImageBtn) {
+      el.renameImageBtn.disabled = false;
+      el.renameImageBtn.textContent = "重命名";
+    }
+  }
   syncDrawLayerSize();
+}
+
+function startRenameSelectedImage() {
+  const img = selectedImage();
+  if (!img) {
+    alert("请先选择图片");
+    return;
+  }
+
+  state.renamingImage = true;
+  renderMainImage();
+  if (el.viewerTitleInput) {
+    el.viewerTitleInput.focus();
+    el.viewerTitleInput.select();
+  }
+}
+
+function confirmRenameSelectedImage() {
+  const img = selectedImage();
+  if (!img) return;
+
+  const nextName = String(el.viewerTitleInput?.value || "");
+  const trimmed = nextName.trim();
+  if (!trimmed) {
+    alert("图片名称不能为空");
+    if (el.viewerTitleInput) {
+      el.viewerTitleInput.focus();
+      el.viewerTitleInput.select();
+    }
+    return;
+  }
+
+  img.name = trimmed;
+  state.renamingImage = false;
+  renderAll();
+  saveState();
+}
+
+function cancelRenameSelectedImage() {
+  state.renamingImage = false;
+  renderMainImage();
 }
 
 function renderBoxes() {
@@ -922,21 +1356,23 @@ function renderBoxes() {
   });
 
   if (state.draftRect) {
+    const draftShape = state.glyphCreateActive ? "rect" : el.annoShapeSelect.value;
+    const draftColor = state.glyphCreateActive ? "#8f3b2e" : el.annoColor.value;
     const draft = document.createElement("div");
-    draft.className = `box temp shape-${el.annoShapeSelect.value}`;
+    draft.className = `box temp shape-${draftShape}`;
     draft.style.left = `${state.draftRect.x * 100}%`;
     draft.style.top = `${state.draftRect.y * 100}%`;
     draft.style.width = `${state.draftRect.w * 100}%`;
     draft.style.height = `${state.draftRect.h * 100}%`;
-    draft.style.setProperty("--shape-color", el.annoColor.value);
-    if (el.annoShapeSelect.value === "rect") {
-      draft.style.borderColor = el.annoColor.value;
-      draft.style.background = hexToRgba(el.annoColor.value, 0.18);
-    } else if (el.annoShapeSelect.value === "line") {
+    draft.style.setProperty("--shape-color", draftColor);
+    if (draftShape === "rect") {
+      draft.style.borderColor = draftColor;
+      draft.style.background = hexToRgba(draftColor, 0.18);
+    } else if (draftShape === "line") {
       draft.style.background = "none";
-      draft.style.borderTop = `3px dashed ${el.annoColor.value}`;
+      draft.style.borderTop = `3px dashed ${draftColor}`;
     } else {
-      draft.style.background = `repeating-linear-gradient(-45deg, ${el.annoColor.value} 0 4px, transparent 4px 8px)`;
+      draft.style.background = `repeating-linear-gradient(-45deg, ${draftColor} 0 4px, transparent 4px 8px)`;
     }
     el.drawLayer.appendChild(draft);
   }
@@ -985,10 +1421,8 @@ function renderPropsEditor() {
     el.propNote.value = "";
     el.propNote.disabled = true;
     el.propCodepoint.value = "";
-    el.allocateUnicodeBtn.disabled = true;
-    el.allocateUnicodeBtn.classList.add("hidden-block");
     el.unicodeAllocArea.classList.remove("active");
-    setUnicodeHint("");
+    setUnicodeHint("仅 char 标签显示 unicode 码");
     return;
   }
 
@@ -1002,6 +1436,10 @@ function renderPropsEditor() {
     row.innerHTML = `<span>${key}</span>`;
     const input = document.createElement("input");
     input.value = anno.attrs[key] || "";
+    if (isCharTagAnno(anno) && key.toLowerCase() === "codepoint") {
+      input.readOnly = true;
+      input.disabled = true;
+    }
     state.propInputs[key] = input;
     row.appendChild(input);
     el.propsEditor.appendChild(row);
@@ -1009,17 +1447,13 @@ function renderPropsEditor() {
   el.propNote.value = anno.transcription || "";
 
   if (isCharTagAnno(anno)) {
-    el.allocateUnicodeBtn.classList.remove("hidden-block");
-    el.allocateUnicodeBtn.disabled = false;
     el.propCodepoint.value = anno.attrs?.codepoint || "";
     el.unicodeAllocArea.classList.add("active");
-    setUnicodeHint("点击“分配unicode码”后系统将先判断是否已收录");
+    setUnicodeHint("char 标签 unicode 仅可在造字面板修改");
   } else {
-    el.allocateUnicodeBtn.classList.add("hidden-block");
-    el.allocateUnicodeBtn.disabled = true;
     el.propCodepoint.value = "";
     el.unicodeAllocArea.classList.remove("active");
-    setUnicodeHint("仅 char 标签可分配unicode码");
+    setUnicodeHint("仅 char 标签显示 unicode 码");
   }
 }
 
@@ -1234,8 +1668,9 @@ function renderImageTagTree() {
 }
 
 function renderSelectedTagInfo() {
+  if (!el.selectedTagInfo) return;
   if (!state.activeDraftTagId) {
-    el.selectedTagInfo.textContent = "未选择标签";
+    el.selectedTagInfo.textContent = "";
     return;
   }
   el.selectedTagInfo.textContent = `已选择标签：${templatePath(state.activeDraftTagId)}`;
@@ -1297,7 +1732,9 @@ function renderAll() {
   renderTemplateTagTree();
   renderTemplateTagSelect();
   renderDraftTagParentOptions();
+  renderMainPanelTabs();
   renderRightPanelTabs();
+  renderGlyphPanel();
 }
 
 function bindDrawEvents() {
@@ -1305,7 +1742,7 @@ function bindDrawEvents() {
   let start = null;
 
   el.drawLayer.addEventListener("mousedown", (evt) => {
-    if (!state.drawingActive || !selectedImage()) return;
+    if ((!state.drawingActive && !state.glyphCreateActive) || !selectedImage()) return;
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((evt.clientX - rect.left) / rect.width);
     const y = clamp01((evt.clientY - rect.top) / rect.height);
@@ -1319,7 +1756,8 @@ function bindDrawEvents() {
       const x = clamp01((evt.clientX - rect.left) / rect.width);
       const y = clamp01((evt.clientY - rect.top) / rect.height);
       const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
-      state.draftRect = toShapeRect(base, el.annoShapeSelect.value);
+      const shape = state.glyphCreateActive ? "rect" : el.annoShapeSelect.value;
+      state.draftRect = toShapeRect(base, shape);
       renderBoxes();
       renderEditMode();
     }
@@ -1327,18 +1765,31 @@ function bindDrawEvents() {
 
   window.addEventListener("mouseup", () => {
     if (drawing && start && state.draftRect) {
-      const tag = findTemplateTag(state.activeDraftTagId);
-      if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
-        const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
-        if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
-        state.pendingDrafts.push({
-          rect: { ...state.draftRect },
-          tagId: tag.id,
-          tagName: tag.name,
-          tagPath: templatePath(tag.id),
-          shape: style.shape,
-          color: style.color
-        });
+      if (state.glyphCreateActive) {
+        if (state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
+          try {
+            captureGlyphDraft(state.draftRect);
+            state.glyphCreateActive = false;
+            saveState();
+            renderAll();
+          } catch (err) {
+            alert(err?.message || "造字失败");
+          }
+        }
+      } else {
+        const tag = findTemplateTag(state.activeDraftTagId);
+        if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
+          const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
+          if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
+          state.pendingDrafts.push({
+            rect: { ...state.draftRect },
+            tagId: tag.id,
+            tagName: tag.name,
+            tagPath: templatePath(tag.id),
+            shape: style.shape,
+            color: style.color
+          });
+        }
       }
       state.draftRect = null;
       renderBoxes();
@@ -1349,7 +1800,7 @@ function bindDrawEvents() {
   });
 
   el.drawLayer.addEventListener("click", (evt) => {
-    if (!state.drawingActive) {
+    if (!state.drawingActive && !state.glyphCreateActive) {
       const img = selectedImage();
       if (!img) return;
       const rect = el.drawLayer.getBoundingClientRect();
@@ -1363,6 +1814,22 @@ function bindDrawEvents() {
 }
 
 function bindEvents() {
+  if (el.mainPanelBtnEdit) {
+    el.mainPanelBtnEdit.addEventListener("click", () => {
+      state.activeMainPanel = "edit";
+      renderAll();
+      saveState();
+    });
+  }
+
+  if (el.mainPanelBtnGlyph) {
+    el.mainPanelBtnGlyph.addEventListener("click", () => {
+      state.activeMainPanel = "glyph";
+      renderAll();
+      saveState();
+    });
+  }
+
   el.panelBtnObject.addEventListener("click", () => {
     state.activeRightPanel = "object";
     renderRightPanelTabs();
@@ -1383,6 +1850,56 @@ function bindEvents() {
 
   el.uploadBtn.addEventListener("click", () => el.uploadInput.click());
 
+  if (el.renameImageBtn) {
+    el.renameImageBtn.addEventListener("click", () => {
+      if (state.renamingImage) {
+        confirmRenameSelectedImage();
+      } else {
+        startRenameSelectedImage();
+      }
+    });
+  }
+
+  if (el.viewerTitleInput) {
+    el.viewerTitleInput.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        confirmRenameSelectedImage();
+      } else if (evt.key === "Escape") {
+        evt.preventDefault();
+        cancelRenameSelectedImage();
+      }
+    });
+  }
+
+  if (el.exportXmlBtn) {
+    el.exportXmlBtn.addEventListener("click", () => {
+      try {
+        exportProjectAsXml();
+      } catch (err) {
+        alert(err?.message || "导出XML失败");
+      }
+    });
+  }
+
+  if (el.autoDrawByAiBtn) {
+    el.autoDrawByAiBtn.addEventListener("click", async () => {
+      const original = el.autoDrawByAiBtn.textContent;
+      el.autoDrawByAiBtn.disabled = true;
+      el.autoDrawByAiBtn.textContent = "识别中";
+      try {
+        await autoDrawLayoutByAI();
+        renderAll();
+        saveState();
+      } catch (err) {
+        alert(err?.message || "自动画框失败");
+      } finally {
+        el.autoDrawByAiBtn.disabled = false;
+        el.autoDrawByAiBtn.textContent = original;
+      }
+    });
+  }
+
   el.uploadInput.addEventListener("change", (evt) => {
     const file = evt.target.files?.[0];
     if (!file) return;
@@ -1402,6 +1919,7 @@ function bindEvents() {
       state.selectedImageId = img.id;
       state.selectedAnnoId = null;
       state.selectedTagFilterName = "";
+      state.renamingImage = false;
       renderAll();
       saveState();
     };
@@ -1410,10 +1928,87 @@ function bindEvents() {
   });
 
   el.startDrawBtn.addEventListener("click", () => {
+    const activeTag = findTemplateTag(state.activeDraftTagId);
+    const activeStyle = activeTag ? getTagStyle(activeTag) : null;
+    if (!state.drawingActive && !state.glyphCreateActive && (!activeStyle || !activeStyle.color)) {
+      alert("请先选择颜色");
+      return;
+    }
+
+    state.glyphCreateActive = false;
     state.drawingActive = !state.drawingActive;
     state.draftRect = null;
     renderAll();
   });
+
+  if (el.glyphStartCreateBtn) {
+    el.glyphStartCreateBtn.addEventListener("click", () => {
+      state.activeMainPanel = "glyph";
+      state.drawingActive = false;
+      state.pendingDrafts = [];
+      state.draftRect = null;
+      state.glyphCreateActive = true;
+      renderAll();
+      saveState();
+    });
+  }
+
+  if (el.glyphReselectBtn) {
+    el.glyphReselectBtn.addEventListener("click", () => {
+      state.activeMainPanel = "glyph";
+      state.drawingActive = false;
+      state.pendingDrafts = [];
+      state.draftRect = null;
+      state.glyphDraft = null;
+      state.glyphCreateActive = true;
+      renderAll();
+      saveState();
+    });
+  }
+
+  if (el.glyphAutoSuggestBtn) {
+    el.glyphAutoSuggestBtn.addEventListener("click", async () => {
+      const original = el.glyphAutoSuggestBtn.textContent;
+      el.glyphAutoSuggestBtn.disabled = true;
+      el.glyphAutoSuggestBtn.textContent = "识别中...";
+      try {
+        await suggestGlyphByAI();
+      } catch (err) {
+        alert(err?.message || "自动识别失败");
+      } finally {
+        el.glyphAutoSuggestBtn.disabled = false;
+        el.glyphAutoSuggestBtn.textContent = original;
+      }
+    });
+  }
+
+  if (el.glyphAssignSaveBtn) {
+    el.glyphAssignSaveBtn.addEventListener("click", () => {
+      try {
+        createGlyphAnnoFromDraft();
+        renderAll();
+        saveState();
+      } catch (err) {
+        alert(err?.message || "保存造字失败");
+      }
+    });
+  }
+
+  if (el.annoAutoSuggestBtn) {
+    el.annoAutoSuggestBtn.addEventListener("click", async () => {
+      const original = el.annoAutoSuggestBtn.textContent;
+      el.annoAutoSuggestBtn.disabled = true;
+      el.annoAutoSuggestBtn.textContent = "识别中";
+      try {
+        await suggestTranscriptionByAI();
+      } catch (err) {
+        alert(err?.message || "自动识别失败");
+      } finally {
+        el.annoAutoSuggestBtn.disabled = false;
+        el.annoAutoSuggestBtn.textContent = original;
+      }
+    });
+  }
 
   el.deleteSelectedImagesBtn.addEventListener("click", () => {
     const selectedIds = new Set(state.batchDeleteImageIds);
@@ -1442,60 +2037,10 @@ function bindEvents() {
     state.draftRect = null;
     state.pendingDrafts = [];
     state.drawingActive = false;
+    state.glyphCreateActive = false;
     el.annoTranscription.value = "";
     renderAll();
   });
-
-  if (el.allocateUnicodeBtn) {
-    el.allocateUnicodeBtn.addEventListener("click", async () => {
-      const original = el.allocateUnicodeBtn.textContent;
-      el.allocateUnicodeBtn.disabled = true;
-      el.allocateUnicodeBtn.textContent = "分配中...";
-      try {
-        const anno = selectedAnno();
-        if (!anno) throw new Error("请先选中一个已保存框");
-        if (!isCharTagAnno(anno)) {
-          throw new Error("仅 char 标签可分配unicode码");
-        }
-        const singleCheck = analyzeSingleGlyphText(anno.transcription || "");
-        if (!singleCheck.isSingle) {
-          throw new Error("仅单字可分配unicode码");
-        }
-
-        const detected = detectCollectedUnicodeForAnno(anno);
-        let summary = "";
-
-        if (detected.collected) {
-          el.propCodepoint.value = detected.codepoint || "";
-          setUnicodeHint(`检测到已收录字：${detected.char}（${detected.codepoint}）`);
-          const ok = window.confirm(`系统识别该字已收录：${detected.char}（${detected.codepoint}）。\n是否正确？\n点击“取消”将进入分配unicode流程。`);
-          if (ok) {
-            anno.attrs = anno.attrs || {};
-            anno.attrs.codepoint = detected.codepoint || "";
-            saveState();
-            renderPropsEditor();
-            return;
-          }
-          setUnicodeHint("已选择重新分配，正在分配unicode...");
-          summary = await allocateUnicodeForCurrentAnno([detected.char]);
-        } else {
-          setUnicodeHint("未检测到已收录编码，正在分配unicode...");
-          summary = await allocateUnicodeForCurrentAnno([detected.char]);
-        }
-
-        const updatedAnno = selectedAnno();
-        if (updatedAnno) el.propCodepoint.value = updatedAnno.attrs?.codepoint || "";
-        setUnicodeHint(`分配完成：${summary}`);
-        saveState();
-        renderPropsEditor();
-      } catch (err) {
-        setUnicodeHint(err?.message || "编码分配失败");
-      } finally {
-        el.allocateUnicodeBtn.disabled = !selectedAnno();
-        el.allocateUnicodeBtn.textContent = original;
-      }
-    });
-  }
 
   el.annoColor.addEventListener("input", () => {
     renderColorPreview(el.annoColor.value);
@@ -1585,11 +2130,12 @@ function bindEvents() {
     Object.keys(state.propInputs).forEach((key) => {
       setIfNotEmpty(nextAttrs, key, state.propInputs[key].value);
     });
+    const prevAttrs = { ...(anno.attrs || {}) };
     anno.attrs = nextAttrs;
+    ["codepoint", "codepointMap", "codepointSourceMap", "glyphChar", "glyphIds", "glyphNote"].forEach((key) => {
+      if (prevAttrs[key]) anno.attrs[key] = prevAttrs[key];
+    });
     anno.transcription = el.propNote.value.trim();
-    if (el.propCodepoint.value.trim()) {
-      anno.attrs.codepoint = el.propCodepoint.value.trim();
-    }
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();

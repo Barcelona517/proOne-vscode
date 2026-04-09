@@ -9,3 +9,9 @@ Thumbs.db
 
 # Temp extracted docs
 .tmp_docx/
+
+# Secrets
+server/.env
+
+# Dependencies
+server/node_modules/

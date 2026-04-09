@@ -12,7 +12,7 @@
       <h1>古籍 Online Editor</h1>
       <div class="topbar-actions">
         <input id="uploadInput" type="file" accept="image/*" class="hidden" />
-        <button id="uploadBtn" class="primary">添加图片</button>
+        <button id="exportXmlBtn" class="primary" type="button">导出为XML</button>
       </div>
     </header>
 
@@ -20,14 +20,21 @@
       <aside class="left-panel">
         <div class="panel-title with-action">
           <span>概览</span>
-          <button id="deleteSelectedImagesBtn" class="mini-btn" type="button">批量删除</button>
+          <div class="panel-title-actions">
+            <button id="uploadBtn" class="mini-btn" type="button">添加图片</button>
+            <button id="deleteSelectedImagesBtn" class="mini-btn" type="button">批量删除</button>
+          </div>
         </div>
         <div id="thumbList" class="thumb-list"></div>
       </aside>
 
       <section class="center-panel">
         <div class="viewer-head">
-          <div id="viewerTitle">未选择图片</div>
+          <div class="viewer-title-wrap">
+            <div id="viewerTitle">未选择图片</div>
+            <input id="viewerTitleInput" class="hidden" type="text" placeholder="输入图片名称后按回车" />
+          </div>
+          <button id="renameImageBtn" class="mini-btn" type="button">重命名</button>
         </div>
         <div id="canvasWrap" class="canvas-wrap">
           <img id="mainImage" alt="主编辑图" draggable="false" />
@@ -36,114 +43,160 @@
       </section>
 
       <aside class="right-panel">
-        <div class="panel-title">编辑面板</div>
+        <div class="panel-title">工作面板</div>
 
-        <div class="panel-switcher" id="panelSwitcher">
-          <button id="panelBtnObject" class="switch-btn" type="button">当前对象</button>
-          <button id="panelBtnDraw" class="switch-btn" type="button">画框模式</button>
-          <button id="panelBtnTags" class="switch-btn" type="button">标签树</button>
+        <div class="main-panel-switcher" id="mainPanelSwitcher">
+          <button id="mainPanelBtnEdit" class="switch-btn" type="button">编辑面板</button>
+          <button id="mainPanelBtnGlyph" class="switch-btn" type="button">造字面板</button>
         </div>
 
-        <div class="section panel-section" id="sectionProps" data-panel="object">
-          <div class="section-title with-action">
-            <span>属性</span>
-            <button id="allocateUnicodeBtn" class="mini-btn" type="button">分配unicode码</button>
+        <div id="sectionEditWorkspace" class="workspace-panel">
+          <div class="panel-switcher" id="panelSwitcher">
+            <button id="panelBtnObject" class="switch-btn" type="button">当前对象</button>
+            <button id="panelBtnDraw" class="switch-btn" type="button">画框模式</button>
+            <button id="panelBtnTags" class="switch-btn" type="button">标签树</button>
           </div>
-          <div id="currentTargetHint" class="muted">当前：图片</div>
-          <div id="propsEditor"></div>
-          <label>简体形式
-            <textarea id="propNote" rows="2" placeholder="框内简体形式"></textarea>
-          </label>
-          <div id="unicodeAllocArea" class="hidden-block">
-            <label>编码结果
-              <input id="propCodepoint" type="text" placeholder="例如：U+E000（自动分配）" readonly />
+
+          <div class="section panel-section" id="sectionProps" data-panel="object">
+            <div class="section-title">属性</div>
+            <div id="currentTargetHint" class="muted">当前：图片</div>
+            <div id="propsEditor"></div>
+            <label>简体形式
+              <textarea id="propNote" rows="2" placeholder="框内简体形式"></textarea>
             </label>
-            <div id="unicodeHint" class="muted">选中框后可为未收录字分配编码</div>
-          </div>
-          <button id="saveCurrentPropsBtn">保存当前对象属性</button>
-        </div>
-
-        <div class="section panel-section" id="sectionDraw" data-panel="draw">
-          <div class="section-title">画框模式</div>
-          <div id="editModeArea">
-            <div id="drawState" class="muted">编辑模式已开启</div>
-            <div class="row-actions single-bottom-gap">
-              <button id="startDrawBtn" class="primary">开始添加</button>
-              <button id="clearDraftBtn">清空草稿</button>
+            <div id="unicodeAllocArea" class="hidden-block">
+              <label>unicode码
+                <input id="propCodepoint" type="text" placeholder="例如：U+E000" readonly />
+              </label>
+              <div id="unicodeHint" class="muted">选中框后可为未收录字分配编码</div>
             </div>
-            <label>样式形状
-              <select id="annoShapeSelect">
-                <option value="rect">方框</option>
-                <option value="line">横线</option>
-                <option value="wave">波浪线</option>
-              </select>
-            </label>
-            <label>样式颜色
-              <div class="color-inline-row">
-                <button id="annoColorPreview" class="color-preview-btn" type="button">改变颜色</button>
+            <button id="saveCurrentPropsBtn">保存当前对象属性</button>
+          </div>
+
+          <div class="section panel-section" id="sectionDraw" data-panel="draw">
+            <div class="section-title with-action">
+              <span>画框模式</span>
+              <button id="autoDrawByAiBtn" class="mini-btn" type="button">自动画框</button>
+            </div>
+            <div id="editModeArea">
+              <div id="drawState" class="muted">编辑模式已开启</div>
+              <div class="row-actions single-bottom-gap">
+                <button id="startDrawBtn" class="primary">开始添加</button>
+                <button id="clearDraftBtn">清空草稿</button>
               </div>
-              <input id="annoColor" class="hidden-color-input" type="color" value="#2e6f86" />
-            </label>
+              <label>样式形状
+                <select id="annoShapeSelect">
+                  <option value="rect">方框</option>
+                  <option value="line">横线</option>
+                  <option value="wave">波浪线</option>
+                </select>
+              </label>
+              <label>样式颜色
+                <div class="color-inline-row">
+                  <button id="annoColorPreview" class="color-preview-btn" type="button">改变颜色</button>
+                </div>
+                <input id="annoColor" class="hidden-color-input" type="color" value="#2e6f86" />
+              </label>
 
-            <div class="picker-title">选择标签（模板树）</div>
-            <div id="tagPickerTree" class="tag-tree picker"></div>
-            <div id="selectedTagInfo" class="muted">未选择标签</div>
+              <div class="picker-title">选择标签</div>
+              <div id="tagPickerTree" class="tag-tree picker"></div>
+              <div id="selectedTagInfo" class="muted"></div>
 
-            <details class="add-tag-box">
-              <summary>或新增标签后使用</summary>
-              <label>新标签名称
-                <input id="draftTagName" type="text" placeholder="例如：chapter / line / note" />
-              </label>
-              <label>父标签
-                <select id="draftTagParent"></select>
-              </label>
-              <label>标签属性(逗号分隔)
-                <input id="draftTagAttrs" type="text" placeholder="例如：id,column,direction" />
-              </label>
-              <label class="check-line">
-                <input id="addDraftTagToTemplate" type="checkbox" checked />
-                <span>加入模板树</span>
-              </label>
-              <button id="createDraftTagBtn">创建并选择该标签</button>
-            </details>
+              <details class="add-tag-box">
+                <summary>或新增标签后使用</summary>
+                <label>新标签名称
+                  <input id="draftTagName" type="text" placeholder="例如：chapter / line / note" />
+                </label>
+                <label>父标签
+                  <select id="draftTagParent"></select>
+                </label>
+                <label>标签属性(逗号分隔)
+                  <input id="draftTagAttrs" type="text" placeholder="例如：id,column,direction" />
+                </label>
+                <label class="check-line">
+                  <input id="addDraftTagToTemplate" type="checkbox" checked />
+                  <span>加入模板树</span>
+                </label>
+                <button id="createDraftTagBtn">创建并选择该标签</button>
+              </details>
 
-            <label>简体转写
-              <input id="annoTranscription" type="text" placeholder="手动输入" />
-            </label>
-            <button id="saveAnnoBtn" class="primary">保存标注</button>
+              <label>简体转写
+                <div class="inline-action-row">
+                  <input id="annoTranscription" type="text" placeholder="手动输入" />
+                  <button id="annoAutoSuggestBtn" class="compact-btn" type="button">自动识别</button>
+                </div>
+              </label>
+              <button id="saveAnnoBtn" class="primary">保存标注</button>
+            </div>
+          </div>
+
+          <div class="section panel-section" id="sectionTags" data-panel="tags">
+            <div class="section-title">标签树</div>
+            <div class="picker-title">当前图片标签树（点击标签高亮对应框线）</div>
+            <div id="imageTagTree" class="tag-tree"></div>
+
+            <div id="templateTreeArea">
+              <div class="picker-title">模板树（标签+属性，可增删改排）</div>
+              <div id="templateTagTree" class="tag-tree"></div>
+
+              <label>选择模板标签
+                <select id="templateTagSelect"></select>
+              </label>
+              <div class="row-actions">
+                <button id="tagMoveUpBtn">同级上移</button>
+                <button id="tagMoveDownBtn">同级下移</button>
+              </div>
+              <button id="deleteTagBtn">删除模板标签</button>
+
+              <label>为模板标签新增属性
+                <div class="inline-action-row">
+                  <input id="newAttrForTemplateTag" type="text" placeholder="属性名，例如：id" />
+                  <button id="addAttrBtn" class="compact-btn" type="button">新增属性</button>
+                </div>
+              </label>
+              <label>删除模板标签属性
+                <div class="inline-action-row">
+                  <select id="templateAttrSelect"></select>
+                  <button id="deleteAttrBtn" class="compact-btn" type="button">删除属性</button>
+                </div>
+              </label>
+            </div>
           </div>
         </div>
 
-        <div class="section panel-section" id="sectionTags" data-panel="tags">
-          <div class="section-title">标签树</div>
-          <div class="picker-title">当前图片标签树（点击标签高亮对应框线）</div>
-          <div id="imageTagTree" class="tag-tree"></div>
+        <div id="sectionGlyphWorkspace" class="workspace-panel">
+          <div class="section">
+            <div class="section-title">造字面板</div>
 
-          <div id="templateTreeArea">
-            <div class="picker-title">模板树（标签+属性，可增删改排）</div>
-            <div id="templateTagTree" class="tag-tree"></div>
-
-          <label>选择模板标签
-            <select id="templateTagSelect"></select>
-          </label>
-          <div class="row-actions">
-            <button id="tagMoveUpBtn">同级上移</button>
-            <button id="tagMoveDownBtn">同级下移</button>
-          </div>
-          <button id="deleteTagBtn">删除模板标签</button>
-
-          <label>为模板标签新增属性
-            <div class="inline-action-row">
-              <input id="newAttrForTemplateTag" type="text" placeholder="属性名，例如：id" />
-              <button id="addAttrBtn" class="compact-btn" type="button">新增属性</button>
+            <div class="glyph-captured-head">
+              <div class="picker-title">当前框选字图</div>
+              <button id="glyphReselectBtn" class="mini-btn" type="button">重新框选</button>
             </div>
-          </label>
-          <label>删除模板标签属性
-            <div class="inline-action-row">
-              <select id="templateAttrSelect"></select>
-              <button id="deleteAttrBtn" class="compact-btn" type="button">删除属性</button>
+            <img id="glyphCapturedPreview" class="glyph-captured-preview" alt="框选字图预览" />
+
+            <label>字符
+              <input id="glyphCharInput" type="text" placeholder="可留空，后续再补" />
+            </label>
+            <label>指定 unicode
+              <input id="glyphManualCodepointInput" type="text" placeholder="例如：U+E123" />
+            </label>
+            <label>IDS（可选）
+              <input id="glyphIdsInput" type="text" placeholder="例如：⿰氵𡿺" />
+            </label>
+            <label>备注（可选）
+              <input id="glyphNoteInput" type="text" placeholder="备注信息" />
+            </label>
+
+            <button id="glyphAutoSuggestBtn" class="compact-btn" type="button">自动生成识别</button>
+
+            <div class="row-actions">
+              <button id="glyphStartCreateBtn" class="primary" type="button">开始造字</button>
+              <button id="glyphAssignSaveBtn" type="button">保存造字</button>
             </div>
-          </label>
+            <div id="glyphCreateHint" class="muted">未进入造字框选模式</div>
+
+            <div class="picker-title">最近造字记录</div>
+            <div id="glyphRecentList" class="tag-tree"></div>
           </div>
         </div>
       </aside>
