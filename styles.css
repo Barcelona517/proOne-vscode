@@ -46,6 +46,12 @@ body {
   margin: 0;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .layout {
   min-height: 0;
   display: grid;
@@ -307,6 +313,25 @@ body {
 .box.selected {
   box-shadow: 0 0 0 2px #111 inset, 0 0 0 2px #111;
 }
+
+.box-resize-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1px solid #111;
+  border-radius: 50%;
+  background: #fff;
+  z-index: 3;
+}
+
+.box-resize-handle.handle-nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.box-resize-handle.handle-n  { left: calc(50% - 4px); top: -5px; cursor: ns-resize; }
+.box-resize-handle.handle-ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.box-resize-handle.handle-e  { right: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.box-resize-handle.handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.box-resize-handle.handle-s  { left: calc(50% - 4px); bottom: -5px; cursor: ns-resize; }
+.box-resize-handle.handle-sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.box-resize-handle.handle-w  { left: -5px; top: calc(50% - 4px); cursor: ew-resize; }
 
 .box.dimmed {
   opacity: 0.2;
@@ -642,6 +667,33 @@ hr {
 
 .hidden {
   display: none;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(360px, calc(100vw - 24px));
+  background: #fffdf7;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: var(--shadow);
+}
+
+.modal-card .mini-btn {
+  margin-top: 8px;
 }
 
 @media (max-width: 1100px) {

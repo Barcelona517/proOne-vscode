@@ -11,8 +11,8 @@
     <header class="topbar">
       <h1>古籍 Online Editor</h1>
       <div class="topbar-actions">
-        <input id="uploadInput" type="file" accept="image/*" class="hidden" />
-        <button id="exportXmlBtn" class="primary" type="button">导出为XML</button>
+        <input id="uploadInput" type="file" accept="image/*,.pdf,application/pdf" class="hidden" />
+        <button id="exportXmlBtn" class="primary" type="button">导出文件</button>
       </div>
     </header>
 
@@ -21,7 +21,7 @@
         <div class="panel-title with-action">
           <span>概览</span>
           <div class="panel-title-actions">
-            <button id="uploadBtn" class="mini-btn" type="button">添加图片</button>
+            <button id="uploadBtn" class="mini-btn" type="button">添加</button>
             <button id="deleteSelectedImagesBtn" class="mini-btn" type="button">批量删除</button>
           </div>
         </div>
@@ -61,10 +61,10 @@
             <div class="section-title">属性</div>
             <div id="currentTargetHint" class="muted">当前：图片</div>
             <div id="propsEditor"></div>
-            <label>简体形式
+            <label id="propNoteRow">简体形式
               <textarea id="propNote" rows="2" placeholder="框内简体形式"></textarea>
             </label>
-            <label>释义
+            <label id="propMeaningRow">释义
               <textarea id="propMeaning" rows="2" placeholder="框内古文内容翻译"></textarea>
             </label>
             <div id="unicodeAllocArea" class="hidden-block">
@@ -126,11 +126,14 @@
                 <button id="createDraftTagBtn">创建并选择该标签</button>
               </details>
 
-              <label>简体转写
+              <label id="annoTranscriptionRow">简体转写
                 <div class="inline-action-row">
                   <input id="annoTranscription" type="text" placeholder="手动输入" />
                   <button id="annoAutoSuggestBtn" class="compact-btn" type="button">自动识别</button>
                 </div>
+              </label>
+              <label id="annoMeaningRow">释义
+                <input id="annoMeaning" type="text" placeholder="框内古文内容翻译" />
               </label>
               <button id="saveAnnoBtn" class="primary">保存标注</button>
             </div>
@@ -172,7 +175,10 @@
 
         <div id="sectionGlyphWorkspace" class="workspace-panel">
           <div class="section">
-            <div class="section-title">造字面板</div>
+            <div class="section-title with-action">
+              <span>造字面板</span>
+              <button id="glyphRuleBtn" class="mini-btn" type="button">分配规则</button>
+            </div>
 
             <div class="glyph-captured-head">
               <div class="picker-title">当前框选字图</div>
@@ -226,6 +232,18 @@
     </main>
   </div>
 
+  <div id="exportFormatModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="exportFormatTitle">
+    <div class="modal-card">
+      <div id="exportFormatTitle" class="section-title">选择导出格式</div>
+      <div class="row-actions">
+        <button id="exportAsXmlBtn" class="primary" type="button">导出所有内容 XML</button>
+        <button id="exportAsCsvBtn" type="button">导出生僻字表格</button>
+      </div>
+      <button id="cancelExportFormatBtn" class="mini-btn" type="button">取消</button>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

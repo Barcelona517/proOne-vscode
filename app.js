@@ -95,7 +95,9 @@ const el = {
   sectionTags: document.getElementById("sectionTags"),
   currentTargetHint: document.getElementById("currentTargetHint"),
   propsEditor: document.getElementById("propsEditor"),
+  propNoteRow: document.getElementById("propNoteRow"),
   propNote: document.getElementById("propNote"),
+  propMeaningRow: document.getElementById("propMeaningRow"),
   propMeaning: document.getElementById("propMeaning"),
   unicodeAllocArea: document.getElementById("unicodeAllocArea"),
   propCodepoint: document.getElementById("propCodepoint"),
@@ -114,6 +116,7 @@ const el = {
   glyphNoteInput: document.getElementById("glyphNoteInput"),
   glyphAutoSuggestBtn: document.getElementById("glyphAutoSuggestBtn"),
   glyphStartCreateBtn: document.getElementById("glyphStartCreateBtn"),
+  glyphRuleBtn: document.getElementById("glyphRuleBtn"),
   glyphReselectBtn: document.getElementById("glyphReselectBtn"),
   glyphAssignSaveBtn: document.getElementById("glyphAssignSaveBtn"),
   glyphCreateHint: document.getElementById("glyphCreateHint"),
@@ -131,7 +134,10 @@ const el = {
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   autoDrawByAiBtn: document.getElementById("autoDrawByAiBtn"),
+  annoTranscriptionRow: document.getElementById("annoTranscriptionRow"),
   annoTranscription: document.getElementById("annoTranscription"),
+  annoMeaningRow: document.getElementById("annoMeaningRow"),
+  annoMeaning: document.getElementById("annoMeaning"),
   annoAutoSuggestBtn: document.getElementById("annoAutoSuggestBtn"),
   saveAnnoBtn: document.getElementById("saveAnnoBtn"),
   imageTagTree: document.getElementById("imageTagTree"),
@@ -147,6 +153,10 @@ const el = {
   deleteAttrBtn: document.getElementById("deleteAttrBtn"),
   deleteSelectedImagesBtn: document.getElementById("deleteSelectedImagesBtn"),
   exportXmlBtn: document.getElementById("exportXmlBtn"),
+  exportFormatModal: document.getElementById("exportFormatModal"),
+  exportAsXmlBtn: document.getElementById("exportAsXmlBtn"),
+  exportAsCsvBtn: document.getElementById("exportAsCsvBtn"),
+  cancelExportFormatBtn: document.getElementById("cancelExportFormatBtn"),
   uploadInput: document.getElementById("uploadInput"),
   uploadBtn: document.getElementById("uploadBtn")
 };
@@ -259,6 +269,116 @@ function timestampForFileName() {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
+function glyphCollectedLabel(item) {
+  return item?.collected ? "已被收录" : "未收录";
+}
+
+function normalizeGlyphRegistryItem(item) {
+  const cp = normalizeCodepointInput(item?.codepoint || "") || String(item?.codepoint || "").trim().toUpperCase();
+  const officialCpRaw = String(item?.officialCodepoint || "").trim();
+  let officialCp = "";
+  try {
+    officialCp = officialCpRaw ? normalizeCodepointInput(officialCpRaw) : "";
+  } catch (_) {
+    officialCp = officialCpRaw.toUpperCase();
+  }
+  const collected = Boolean(item?.collected) || Boolean(officialCp);
+  return {
+    ...item,
+    codepoint: cp,
+    collected,
+    officialCodepoint: officialCp || "",
+    collectedAt: String(item?.collectedAt || "")
+  };
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\r\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function buildGlyphRegistryCsv() {
+  const headers = [
+    "序号",
+    "字形",
+    "当前Unicode",
+    "官方Unicode",
+    "收录状态",
+    "IDS",
+    "备注",
+    "图片名",
+    "创建时间",
+    "收录更新时间"
+  ];
+  const rows = [headers.join(",")];
+  state.glyphRegistry.forEach((item, idx) => {
+    const row = [
+      idx + 1,
+      item.glyphChar || "",
+      item.codepoint || "",
+      item.officialCodepoint || "",
+      glyphCollectedLabel(item),
+      item.glyphIds || "",
+      item.glyphNote || "",
+      item.imageName || "",
+      item.createdAt || "",
+      item.collectedAt || ""
+    ].map(csvEscape);
+    rows.push(row.join(","));
+  });
+  return `\uFEFF${rows.join("\r\n")}`;
+}
+
+function exportGlyphRegistryCsv() {
+  const csv = buildGlyphRegistryCsv();
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `guji_glyph_registry_${timestampForFileName()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function syncGlyphCodepointToAnnotations(targetGlyphChar, oldCodepoint, nextCodepoint) {
+  const target = singleCharForGlyphLookup(targetGlyphChar || "");
+  state.images.forEach((img) => {
+    (img.annotations || []).forEach((anno) => {
+      if (!isCharTagAnno(anno)) return;
+      const annoGlyph = singleCharForGlyphLookup(anno.attrs?.glyphChar || anno.transcription || "");
+      const annoCp = String(anno.attrs?.codepoint || "").trim().toUpperCase();
+      const matchedByGlyph = target && annoGlyph && annoGlyph === target;
+      const matchedByOldCp = oldCodepoint && annoCp === oldCodepoint;
+      if (matchedByGlyph || matchedByOldCp) {
+        anno.attrs = anno.attrs || {};
+        anno.attrs.codepoint = nextCodepoint;
+      }
+    });
+  });
+}
+
+function markGlyphAsCollectedByIndex(index) {
+  const item = state.glyphRegistry[index];
+  if (!item) return;
+  const current = String(item.codepoint || "").trim().toUpperCase();
+  const input = window.prompt("输入官方 Unicode（例如 U+2B740）", item.officialCodepoint || current || "");
+  if (input == null) return;
+  const nextCp = normalizeCodepointInput(input);
+  const oldCp = current;
+  item.codepoint = nextCp;
+  item.officialCodepoint = nextCp;
+  item.collected = true;
+  item.collectedAt = new Date().toISOString();
+  syncGlyphCodepointToAnnotations(item.glyphChar, oldCp, nextCp);
+  renderAll();
+  saveState();
+}
+
 function buildTemplateXml(lines, parentId, indent) {
   const children = templateChildren(parentId);
   children.forEach((tag) => {
@@ -350,11 +470,14 @@ function buildProjectXml() {
       `index="${index + 1}"`,
       `glyphChar="${escapeXml(item.glyphChar || "")}"`,
       `codepoint="${escapeXml(item.codepoint || "")}"`,
+      `collected="${escapeXml(item.collected ? "true" : "false")}"`,
+      `officialCodepoint="${escapeXml(item.officialCodepoint || "")}"`,
       `imageId="${escapeXml(item.imageId || "")}"`,
       `imageName="${escapeXml(item.imageName || "")}"`,
       `annoId="${escapeXml(item.annoId || "")}"`
     ];
     if (item.createdAt) attrs.push(`createdAt="${escapeXml(item.createdAt)}"`);
+    if (item.collectedAt) attrs.push(`collectedAt="${escapeXml(item.collectedAt)}"`);
     if (item.previewDataUrl) attrs.push(`previewDataUrl="${escapeXml(item.previewDataUrl)}"`);
     lines.push(`    <glyph ${attrs.join(" ")}/>`);
   });
@@ -375,6 +498,45 @@ function exportProjectAsXml() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function buildProjectJson() {
+  return {
+    schemaVersion: "1.0",
+    exportedAt: new Date().toISOString(),
+    summary: {
+      imageCount: state.images.length,
+      annotationCount: state.images.reduce((sum, img) => sum + (img.annotations?.length || 0), 0),
+      templateTagCount: state.templateTags.length,
+      glyphCount: state.glyphRegistry.length
+    },
+    template: state.templateTags,
+    images: state.images,
+    glyphRegistry: state.glyphRegistry
+  };
+}
+
+function exportProjectAsJson() {
+  const payload = JSON.stringify(buildProjectJson(), null, 2);
+  const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `guji_export_${timestampForFileName()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function openExportFormatModal() {
+  if (!el.exportFormatModal) return;
+  el.exportFormatModal.classList.remove("hidden");
+}
+
+function closeExportFormatModal() {
+  if (!el.exportFormatModal) return;
+  el.exportFormatModal.classList.add("hidden");
 }
 
 function normalizeCodepointInput(input) {
@@ -471,6 +633,20 @@ function allocateGlyphCodepoint(glyphChar, manualCodepoint) {
     if (!used.has(candidate)) return candidate;
   }
   throw new Error("PUA编码池已满，无法分配");
+}
+
+function showGlyphAllocationRules() {
+  const lines = [
+    "编码选址： 使用 Unicode 私有使用区 (PUA)。",
+    "优先使用基本平面 (BMP) 的 U+E000 - U+F8FF。",
+    "备选辅助平面 (Plane 15/16) 应对万级以上的大型字库。",
+    "分配规则 (排序逻辑)：",
+    "首选：检索现有标准。在分配 PUA 前，必须检索 Unicode Extension A-I 确认是否已收录。",
+    "次选：按部首排序。参照《康熙字典》214部首。",
+    "内部分序： 同一部首内按 剩余笔画数（由少到多）排序；笔画相同时按 起笔笔顺（横、竖、撇、点、折）排序。",
+    "预留空位： 每个部首区块后预留 10%-20% 的空位，便于后期插入新发现的字。"
+  ];
+  alert(lines.join("\n"));
 }
 
 function ensureCharTemplateTag() {
@@ -683,6 +859,11 @@ function createGlyphAnnoFromDraft() {
     id: uid("glyph"),
     glyphChar: glyphChar || "(未录字符)",
     codepoint,
+    officialCodepoint: "",
+    collected: false,
+    collectedAt: "",
+    glyphIds: (el.glyphIdsInput?.value || "").trim(),
+    glyphNote: (el.glyphNoteInput?.value || "").trim(),
     imageId: img.id,
     imageName: img.name,
     previewDataUrl: state.glyphDraft.previewDataUrl || "",
@@ -1018,6 +1199,27 @@ function isCharTagAnno(anno) {
   return parts[parts.length - 1] === "char";
 }
 
+function syncCharAnnoCodepointFromRegistry(anno) {
+  if (!isCharTagAnno(anno)) return;
+  anno.attrs = anno.attrs || {};
+
+  const byAnnoId = state.glyphRegistry.find((item) => String(item.annoId || "") === String(anno.id || ""));
+  let target = byAnnoId || null;
+
+  if (!target) {
+    const glyphFromAnno = singleCharForGlyphLookup(anno.attrs?.glyphChar || anno.transcription || "");
+    if (glyphFromAnno) {
+      target = state.glyphRegistry.find((item) => singleCharForGlyphLookup(item.glyphChar || "") === glyphFromAnno) || null;
+    }
+  }
+
+  if (!target?.codepoint) return;
+  const normalized = normalizeCodepointInput(target.codepoint) || String(target.codepoint).trim().toUpperCase();
+  if (normalized && anno.attrs.codepoint !== normalized) {
+    anno.attrs.codepoint = normalized;
+  }
+}
+
 function renderMainPanelTabs() {
   const active = state.activeMainPanel === "glyph" ? "glyph" : "edit";
   state.activeMainPanel = active;
@@ -1057,9 +1259,22 @@ function renderGlyphPanel() {
     li.textContent = "暂无造字记录";
     ul.appendChild(li);
   } else {
-    recent.forEach((item) => {
+    recent.forEach((item, idx) => {
       const li = document.createElement("li");
-      li.textContent = `${item.glyphChar} -> ${item.codepoint} (${item.imageName})`;
+      const row = document.createElement("div");
+      row.className = "inline-action-row";
+      const text = document.createElement("span");
+      text.textContent = `${item.glyphChar} -> ${item.codepoint} [${glyphCollectedLabel(item)}] (${item.imageName})`;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "mini-btn";
+      btn.textContent = item.collected ? "更新官方码" : "标记已收录";
+      btn.addEventListener("click", () => {
+        markGlyphAsCollectedByIndex(idx);
+      });
+      row.appendChild(text);
+      row.appendChild(btn);
+      li.appendChild(row);
       ul.appendChild(li);
     });
   }
@@ -1101,8 +1316,109 @@ function supportsMeaningAttrByTagId(tagId) {
   return templateDepth(tagId) >= 3;
 }
 
+function setObjectTextFieldsVisible(visible) {
+  if (el.propNoteRow) el.propNoteRow.classList.toggle("hidden", !visible);
+  if (el.propMeaningRow) el.propMeaningRow.classList.toggle("hidden", !visible);
+}
+
+function setDrawTextFieldsVisible(visible) {
+  if (el.annoTranscriptionRow) el.annoTranscriptionRow.classList.toggle("hidden", !visible);
+  if (el.annoMeaningRow) el.annoMeaningRow.classList.toggle("hidden", !visible);
+  if (!visible) {
+    if (el.annoTranscription) el.annoTranscription.value = "";
+    if (el.annoMeaning) el.annoMeaning.value = "";
+  }
+}
+
+function drawTextFieldsEnabled() {
+  const tag = findTemplateTag(state.activeDraftTagId);
+  if (!tag) return false;
+  return supportsMeaningAttrByTagId(tag.id);
+}
+
 function pointInRect(rect, x, y) {
   return x >= rect.x && y >= rect.y && x <= rect.x + rect.w && y <= rect.y + rect.h;
+}
+
+function rectsOverlap(a, b, eps = 0.00001) {
+  return (
+    a.x < b.x + b.w - eps &&
+    a.x + a.w > b.x + eps &&
+    a.y < b.y + b.h - eps &&
+    a.y + a.h > b.y + eps
+  );
+}
+
+function hasSignificantOverlap(a, b) {
+  if (!rectsOverlap(a, b)) return false;
+  const inter = rectIntersectionArea(a, b);
+  const minArea = Math.max(0.000001, Math.min(a.w * a.h, b.w * b.h));
+  const overlapRatio = inter / minArea;
+  // Allow tiny edge-touch and minor hand-drawn crossing; block meaningful overlap only.
+  return overlapRatio >= 0.12;
+}
+
+function hasSameTagOverlapInAnnotations(img, tagId, rect, selfAnnoId = null) {
+  return (img.annotations || []).some((anno) => {
+    if (anno.id === selfAnnoId) return false;
+    if (anno.tagId !== tagId) return false;
+    return hasSignificantOverlap(anno.rect, rect);
+  });
+}
+
+function hasSameTagOverlapInDrafts(drafts, tagId, rect) {
+  return (drafts || []).some((draft) => {
+    if (draft.tagId !== tagId) return false;
+    return hasSignificantOverlap(draft.rect, rect);
+  });
+}
+
+function validatePendingDraftsNoSameTagOverlap(img, drafts) {
+  for (let i = 0; i < drafts.length; i += 1) {
+    const draft = drafts[i];
+    if (hasSameTagOverlapInAnnotations(img, draft.tagId, draft.rect, null)) {
+      return { ok: false, message: `标签 ${draft.tagName || draft.tagId} 与已有同类型方框重叠` };
+    }
+    for (let j = i + 1; j < drafts.length; j += 1) {
+      const other = drafts[j];
+      if (draft.tagId === other.tagId && hasSignificantOverlap(draft.rect, other.rect)) {
+        return { ok: false, message: `待保存框中存在同类型重叠：${draft.tagName || draft.tagId}` };
+      }
+    }
+  }
+  return { ok: true, message: "" };
+}
+
+function rectIntersectionArea(a, b) {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.w, b.x + b.w);
+  const bottom = Math.min(a.y + a.h, b.y + b.h);
+  const w = Math.max(0, right - left);
+  const h = Math.max(0, bottom - top);
+  return w * h;
+}
+
+function getCoveredAnnoIds(img, selfAnnoId, rect) {
+  const others = (img.annotations || []).filter((it) => it.id !== selfAnnoId);
+  const charOthers = others.filter((it) => isCharTagAnno(it));
+  const pool = charOthers.length > 0 ? charOthers : others;
+  const ids = new Set();
+  pool.forEach((anno) => {
+    const overlapArea = rectIntersectionArea(rect, anno.rect);
+    const minArea = Math.min(Math.max(0.000001, rect.w * rect.h), Math.max(0.000001, anno.rect.w * anno.rect.h));
+    const overlapRatio = overlapArea / minArea;
+    if (overlapArea > 0.00005 && overlapRatio >= 0.15) {
+      ids.add(anno.id);
+    }
+  });
+  return ids;
+}
+
+function notifyNewCoveredAnnos(beforeIds, afterIds) {
+  const added = Array.from(afterIds).filter((id) => !beforeIds.has(id));
+  if (added.length === 0) return;
+  alert(`提醒：当前框范围内检测到 ${added.length} 个新增字，请确认是否需要拆分或新增标注。`);
 }
 
 function annoArea(anno) {
@@ -1208,6 +1524,93 @@ function pickTopAnnoAtPoint(img, x, y) {
   return hits[0];
 }
 
+function createUploadedImageItem(name, src) {
+  return {
+    id: uid("upload"),
+    name,
+    src,
+    category: "用户上传",
+    contentElement: "page",
+    contentKind: "图片",
+    meta: { id: uid("img") },
+    annotations: []
+  };
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function stripFileExt(name) {
+  const raw = String(name || "").trim();
+  const idx = raw.lastIndexOf(".");
+  return idx > 0 ? raw.slice(0, idx) : raw;
+}
+
+async function importImageFile(file) {
+  const src = await readFileAsDataUrl(file);
+  const img = createUploadedImageItem(file.name, src);
+  state.images.push(img);
+  state.selectedImageId = img.id;
+}
+
+async function importPdfFile(file) {
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib || typeof pdfjsLib.getDocument !== "function") {
+    throw new Error("PDF 解析库未加载，请检查网络后重试");
+  }
+
+  if (pdfjsLib.GlobalWorkerOptions) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+
+  const data = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data });
+  const pdf = await loadingTask.promise;
+  const baseName = stripFileExt(file.name) || "pdf";
+  const createdIds = [];
+
+  for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
+    const page = await pdf.getPage(pageNo);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) continue;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const src = canvas.toDataURL("image/png");
+    const name = `${baseName}_p${String(pageNo).padStart(3, "0")}.png`;
+    const img = createUploadedImageItem(name, src);
+    state.images.push(img);
+    createdIds.push(img.id);
+  }
+
+  if (createdIds.length > 0) {
+    state.selectedImageId = createdIds[0];
+    alert(`PDF 导入完成，共 ${createdIds.length} 页`);
+  }
+}
+
+async function importSelectedFile(file) {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+  if (isPdf) {
+    await importPdfFile(file);
+  } else {
+    await importImageFile(file);
+  }
+  state.selectedAnnoId = null;
+  state.selectedTagFilterName = "";
+  state.renamingImage = false;
+  renderAll();
+  saveState();
+}
+
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     images: state.images,
@@ -1232,7 +1635,9 @@ function loadState() {
         state.selectedTemplateTagId = parsed.selectedTemplateTagId || parsed.templateTags[0]?.id || null;
         state.activeMainPanel = parsed.activeMainPanel || "edit";
         state.activeRightPanel = parsed.activeRightPanel || "object";
-        state.glyphRegistry = Array.isArray(parsed.glyphRegistry) ? parsed.glyphRegistry : [];
+        state.glyphRegistry = Array.isArray(parsed.glyphRegistry)
+          ? parsed.glyphRegistry.map((item) => normalizeGlyphRegistryItem(item))
+          : [];
         state.glyphDraft = null;
         state.glyphCreateActive = false;
         ensureTemplateOrder();
@@ -1466,6 +1871,17 @@ function renderBoxes() {
       renderAll();
     });
     if (anno.id === state.selectedAnnoId) {
+      if (anno.shape === "rect") {
+        ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
+          const handle = document.createElement("span");
+          handle.className = `box-resize-handle handle-${dir}`;
+          handle.dataset.dir = dir;
+          handle.dataset.annoId = anno.id;
+          handle.addEventListener("mousedown", (evt) => evt.stopPropagation());
+          box.appendChild(handle);
+        });
+      }
+
       const delBtn = document.createElement("button");
       delBtn.className = "box-delete";
       delBtn.textContent = "×";
@@ -1535,6 +1951,7 @@ function renderPropsEditor() {
   if (!img) return;
 
   if (!anno) {
+    setObjectTextFieldsVisible(false);
     el.currentTargetHint.textContent = "当前：图片";
     ["id"].forEach((key) => {
       const row = document.createElement("div");
@@ -1560,10 +1977,12 @@ function renderPropsEditor() {
     return;
   }
 
-  el.propNote.disabled = false;
   el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
+  syncCharAnnoCodepointFromRegistry(anno);
   const templateTag = findTemplateTag(anno.tagId);
   const meaningEnabled = supportsMeaningAttrByTagId(anno.tagId);
+  setObjectTextFieldsVisible(meaningEnabled);
+  el.propNote.disabled = !meaningEnabled;
   const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
   attrs.forEach((key) => {
     const row = document.createElement("div");
@@ -1607,6 +2026,7 @@ function renderPropsEditor() {
 }
 
 function renderEditMode() {
+  setDrawTextFieldsVisible(drawTextFieldsEnabled());
   if (state.drawingActive) {
     const count = state.pendingDrafts.length;
     if (state.draftRect) {
@@ -1617,7 +2037,9 @@ function renderEditMode() {
     el.startDrawBtn.textContent = "取消添加";
   } else {
     const count = state.pendingDrafts.length;
-    el.drawState.textContent = count > 0 ? `待保存 ${count} 个框，点击保存标注统一保存` : "先选择标签和画框样式，再点击“开始添加”按钮";
+    el.drawState.textContent = count > 0
+      ? `待保存 ${count} 个框，点击保存标注统一保存（可拖动已有框微调位置）`
+      : "先选择标签和画框样式，再点击“开始添加”按钮（未开启添加时可拖动已有框）";
     el.startDrawBtn.textContent = "开始添加";
   }
 }
@@ -1820,9 +2242,13 @@ function renderSelectedTagInfo() {
   if (!el.selectedTagInfo) return;
   if (!state.activeDraftTagId) {
     el.selectedTagInfo.textContent = "";
+    setDrawTextFieldsVisible(false);
     return;
   }
-  el.selectedTagInfo.textContent = `已选择标签：${templatePath(state.activeDraftTagId)}`;
+  const enabled = drawTextFieldsEnabled();
+  const depthTip = enabled ? "" : "（第3层以下才显示简体形式/释义）";
+  el.selectedTagInfo.textContent = `已选择标签：${templatePath(state.activeDraftTagId)}${depthTip}`;
+  setDrawTextFieldsVisible(enabled);
   syncPickerFromActiveTag();
 }
 
@@ -1889,22 +2315,127 @@ function renderAll() {
 function bindDrawEvents() {
   let drawing = false;
   let start = null;
+  let movingAnnoId = null;
+  let moveOffset = null;
+  let moveStartRect = null;
+  let movedDuringDrag = false;
+  let resizingAnnoId = null;
+  let resizeDir = "";
+  let resizeStartRect = null;
+  let overlapBeforeIds = new Set();
+  let suppressLayerClick = false;
 
   el.drawLayer.addEventListener("mousedown", (evt) => {
-    if ((!state.drawingActive && !state.glyphCreateActive) || !selectedImage()) return;
+    const img = selectedImage();
+    if (!img) return;
+    const rect = el.drawLayer.getBoundingClientRect();
+    const x = clamp01((evt.clientX - rect.left) / rect.width);
+    const y = clamp01((evt.clientY - rect.top) / rect.height);
+    const allowAdjustExisting = !state.glyphCreateActive && (!state.drawingActive || evt.altKey);
+
+    if (allowAdjustExisting) {
+      if (evt.target instanceof Element && evt.target.closest(".box-delete")) return;
+      if (evt.target instanceof Element) {
+        const resizeHandle = evt.target.closest(".box-resize-handle");
+        if (resizeHandle) {
+          const handleAnnoId = resizeHandle.getAttribute("data-anno-id") || state.selectedAnnoId;
+          const resizeAnno = img.annotations.find((it) => it.id === handleAnnoId);
+          if (!resizeAnno) return;
+          state.selectedAnnoId = resizeAnno.id;
+          resizingAnnoId = resizeAnno.id;
+          resizeDir = resizeHandle.getAttribute("data-dir") || "se";
+          resizeStartRect = { ...resizeAnno.rect };
+          overlapBeforeIds = getCoveredAnnoIds(img, resizeAnno.id, resizeAnno.rect);
+          movedDuringDrag = false;
+          evt.preventDefault();
+          renderAll();
+          return;
+        }
+      }
+
+      const picked = pickTopAnnoAtPoint(img, x, y);
+      if (picked) {
+        state.selectedAnnoId = picked.id;
+        movingAnnoId = picked.id;
+        moveOffset = { x: x - picked.rect.x, y: y - picked.rect.y };
+        moveStartRect = { ...picked.rect };
+        overlapBeforeIds = getCoveredAnnoIds(img, picked.id, picked.rect);
+        movedDuringDrag = false;
+        evt.preventDefault();
+        renderAll();
+        return;
+      }
+
+      if (!state.drawingActive) {
+        return;
+      }
+    }
+
     if (state.glyphCreateActive) {
       clearGlyphInputFields();
     } else if (el.annoTranscription) {
       el.annoTranscription.value = "";
     }
-    const rect = el.drawLayer.getBoundingClientRect();
-    const x = clamp01((evt.clientX - rect.left) / rect.width);
-    const y = clamp01((evt.clientY - rect.top) / rect.height);
+    evt.preventDefault();
     drawing = true;
     start = { x, y };
-  });
+  }, true);
 
   window.addEventListener("mousemove", (evt) => {
+    if (resizingAnnoId && resizeStartRect) {
+      const img = selectedImage();
+      if (!img) return;
+      const resizeAnno = img.annotations.find((it) => it.id === resizingAnnoId);
+      if (!resizeAnno) return;
+      const rect = el.drawLayer.getBoundingClientRect();
+      const x = clamp01((evt.clientX - rect.left) / rect.width);
+      const y = clamp01((evt.clientY - rect.top) / rect.height);
+
+      let x1 = resizeStartRect.x;
+      let y1 = resizeStartRect.y;
+      let x2 = resizeStartRect.x + resizeStartRect.w;
+      let y2 = resizeStartRect.y + resizeStartRect.h;
+
+      if (resizeDir.includes("w")) x1 = x;
+      if (resizeDir.includes("e")) x2 = x;
+      if (resizeDir.includes("n")) y1 = y;
+      if (resizeDir.includes("s")) y2 = y;
+
+      const base = normalizeRect({ x1, y1, x2, y2 });
+      const nextRect = normalizeAnnoRectForShape(base, resizeAnno.shape || "rect");
+      const changed =
+        Math.abs(nextRect.x - resizeAnno.rect.x) > 0.00001 ||
+        Math.abs(nextRect.y - resizeAnno.rect.y) > 0.00001 ||
+        Math.abs(nextRect.w - resizeAnno.rect.w) > 0.00001 ||
+        Math.abs(nextRect.h - resizeAnno.rect.h) > 0.00001;
+      if (changed) {
+        resizeAnno.rect = nextRect;
+        movedDuringDrag = true;
+        renderBoxes();
+      }
+      return;
+    }
+
+    if (movingAnnoId && moveOffset) {
+      const img = selectedImage();
+      if (!img) return;
+      const movingAnno = img.annotations.find((it) => it.id === movingAnnoId);
+      if (!movingAnno) return;
+      const rect = el.drawLayer.getBoundingClientRect();
+      const x = clamp01((evt.clientX - rect.left) / rect.width);
+      const y = clamp01((evt.clientY - rect.top) / rect.height);
+      const nextX = Math.max(0, Math.min(1 - movingAnno.rect.w, x - moveOffset.x));
+      const nextY = Math.max(0, Math.min(1 - movingAnno.rect.h, y - moveOffset.y));
+      const changed = Math.abs(nextX - movingAnno.rect.x) > 0.00001 || Math.abs(nextY - movingAnno.rect.y) > 0.00001;
+      if (changed) {
+        movingAnno.rect.x = nextX;
+        movingAnno.rect.y = nextY;
+        movedDuringDrag = true;
+        renderBoxes();
+      }
+      return;
+    }
+
     if (drawing && start) {
       const rect = el.drawLayer.getBoundingClientRect();
       const x = clamp01((evt.clientX - rect.left) / rect.width);
@@ -1918,6 +2449,68 @@ function bindDrawEvents() {
   });
 
   window.addEventListener("mouseup", () => {
+    if (resizingAnnoId) {
+      const img = selectedImage();
+      const resizeAnno = img ? img.annotations.find((it) => it.id === resizingAnnoId) : null;
+      if (resizeAnno && movedDuringDrag) {
+        if (hasSameTagOverlapInAnnotations(img, resizeAnno.tagId, resizeAnno.rect, resizeAnno.id)) {
+          resizeAnno.rect = { ...resizeStartRect };
+          alert("同类型方框不能重叠，已撤销本次缩放");
+          resizingAnnoId = null;
+          resizeDir = "";
+          resizeStartRect = null;
+          overlapBeforeIds = new Set();
+          movedDuringDrag = false;
+          renderAll();
+          return;
+        }
+        const currentAttrId = String(resizeAnno.attrs?.id || "").trim();
+        resizeAnno.parentAnnoId = findParentByIdOrContainment(img, resizeAnno.rect, resizeAnno.id, currentAttrId);
+        const overlapAfterIds = getCoveredAnnoIds(img, resizeAnno.id, resizeAnno.rect);
+        notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
+        saveState();
+        suppressLayerClick = true;
+      }
+      resizingAnnoId = null;
+      resizeDir = "";
+      resizeStartRect = null;
+      overlapBeforeIds = new Set();
+      movedDuringDrag = false;
+      renderAll();
+      return;
+    }
+
+    if (movingAnnoId) {
+      const img = selectedImage();
+      const movingAnno = img ? img.annotations.find((it) => it.id === movingAnnoId) : null;
+      if (movingAnno && movedDuringDrag) {
+        if (hasSameTagOverlapInAnnotations(img, movingAnno.tagId, movingAnno.rect, movingAnno.id)) {
+          movingAnno.rect = moveStartRect ? { ...moveStartRect } : movingAnno.rect;
+          alert("同类型方框不能重叠，已撤销本次移动");
+          movingAnnoId = null;
+          moveOffset = null;
+          moveStartRect = null;
+          overlapBeforeIds = new Set();
+          movedDuringDrag = false;
+          renderAll();
+          return;
+        }
+        const currentAttrId = String(movingAnno.attrs?.id || "").trim();
+        movingAnno.parentAnnoId = findParentByIdOrContainment(img, movingAnno.rect, movingAnno.id, currentAttrId);
+        const overlapAfterIds = getCoveredAnnoIds(img, movingAnno.id, movingAnno.rect);
+        notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
+        saveState();
+        suppressLayerClick = true;
+      }
+      movingAnnoId = null;
+      moveOffset = null;
+      moveStartRect = null;
+      overlapBeforeIds = new Set();
+      movedDuringDrag = false;
+      renderAll();
+      return;
+    }
+
     if (drawing && start && state.draftRect) {
       if (state.glyphCreateActive) {
         if (state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
@@ -1955,6 +2548,10 @@ function bindDrawEvents() {
 
   el.drawLayer.addEventListener("click", (evt) => {
     if (!state.drawingActive && !state.glyphCreateActive) {
+      if (suppressLayerClick) {
+        suppressLayerClick = false;
+        return;
+      }
       const img = selectedImage();
       if (!img) return;
       const rect = el.drawLayer.getBoundingClientRect();
@@ -2002,7 +2599,9 @@ function bindEvents() {
     saveState();
   });
 
-  el.uploadBtn.addEventListener("click", () => el.uploadInput.click());
+  el.uploadBtn.addEventListener("click", () => {
+    el.uploadInput.click();
+  });
 
   if (el.renameImageBtn) {
     el.renameImageBtn.addEventListener("click", () => {
@@ -2028,13 +2627,49 @@ function bindEvents() {
 
   if (el.exportXmlBtn) {
     el.exportXmlBtn.addEventListener("click", () => {
+      openExportFormatModal();
+    });
+  }
+
+  if (el.exportAsXmlBtn) {
+    el.exportAsXmlBtn.addEventListener("click", () => {
       try {
         exportProjectAsXml();
+        closeExportFormatModal();
       } catch (err) {
-        alert(err?.message || "导出XML失败");
+        alert(err?.message || "导出失败");
       }
     });
   }
+
+  if (el.exportAsCsvBtn) {
+    el.exportAsCsvBtn.addEventListener("click", () => {
+      try {
+        exportGlyphRegistryCsv();
+        closeExportFormatModal();
+      } catch (err) {
+        alert(err?.message || "导出失败");
+      }
+    });
+  }
+
+  if (el.cancelExportFormatBtn) {
+    el.cancelExportFormatBtn.addEventListener("click", () => {
+      closeExportFormatModal();
+    });
+  }
+
+  if (el.exportFormatModal) {
+    el.exportFormatModal.addEventListener("click", (evt) => {
+      if (evt.target === el.exportFormatModal) closeExportFormatModal();
+    });
+  }
+
+  window.addEventListener("keydown", (evt) => {
+    if (evt.key === "Escape") {
+      closeExportFormatModal();
+    }
+  });
 
   if (el.autoDrawByAiBtn) {
     el.autoDrawByAiBtn.addEventListener("click", async () => {
@@ -2054,32 +2689,23 @@ function bindEvents() {
     });
   }
 
-  el.uploadInput.addEventListener("change", (evt) => {
-    const file = evt.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = {
-        id: uid("upload"),
-        name: file.name,
-        src: reader.result,
-        category: "用户上传",
-        contentElement: "page",
-        contentKind: "图片",
-        meta: { id: uid("img") },
-        annotations: []
-      };
-      state.images.push(img);
-      state.selectedImageId = img.id;
-      state.selectedAnnoId = null;
-      state.selectedTagFilterName = "";
-      state.renamingImage = false;
-      renderAll();
-      saveState();
-    };
-    reader.readAsDataURL(file);
-    evt.target.value = "";
-  });
+  function bindUploadInput(inputEl) {
+    if (!inputEl) return;
+    inputEl.addEventListener("change", (evt) => {
+      const file = evt.target.files?.[0];
+      if (!file) return;
+      Promise.resolve()
+        .then(async () => {
+          await importSelectedFile(file);
+        })
+        .catch((err) => {
+          alert(err?.message || "导入失败");
+        });
+      evt.target.value = "";
+    });
+  }
+
+  bindUploadInput(el.uploadInput);
 
   el.startDrawBtn.addEventListener("click", () => {
     const activeTag = findTemplateTag(state.activeDraftTagId);
@@ -2098,12 +2724,24 @@ function bindEvents() {
   if (el.glyphStartCreateBtn) {
     el.glyphStartCreateBtn.addEventListener("click", () => {
       state.activeMainPanel = "glyph";
-      state.drawingActive = false;
-      state.pendingDrafts = [];
-      state.draftRect = null;
-      state.glyphCreateActive = true;
+      if (state.glyphCreateActive) {
+        state.glyphCreateActive = false;
+        state.draftRect = null;
+        state.glyphDraft = null;
+      } else {
+        state.drawingActive = false;
+        state.pendingDrafts = [];
+        state.draftRect = null;
+        state.glyphCreateActive = true;
+      }
       renderAll();
       saveState();
+    });
+  }
+
+  if (el.glyphRuleBtn) {
+    el.glyphRuleBtn.addEventListener("click", () => {
+      showGlyphAllocationRules();
     });
   }
 
@@ -2297,10 +2935,20 @@ function bindEvents() {
     const img = selectedImage();
     if (!img) return;
     if (state.pendingDrafts.length === 0) { alert("请先画至少一个框"); return; }
+    const overlapCheck = validatePendingDraftsNoSameTagOverlap(img, state.pendingDrafts);
+    if (!overlapCheck.ok) {
+      alert(`保存失败：${overlapCheck.message}`);
+      return;
+    }
+
+    const textEnabled = drawTextFieldsEnabled();
+    const draftTranscription = textEnabled ? el.annoTranscription.value.trim() : "";
+    const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
     let lastAnnoId = null;
     state.pendingDrafts.forEach((draftItem) => {
       const attrs = {};
+      if (textEnabled && draftMeaning) attrs.meaning = draftMeaning;
       const anno = {
         id: uid("anno"),
         tagId: draftItem.tagId,
@@ -2308,7 +2956,7 @@ function bindEvents() {
         tagPath: draftItem.tagPath,
         shape: draftItem.shape,
         color: draftItem.color,
-        transcription: el.annoTranscription.value.trim(),
+        transcription: draftTranscription,
         rect: { ...draftItem.rect },
         attrs,
         parentAnnoId: null
@@ -2324,6 +2972,7 @@ function bindEvents() {
     state.draftRect = null;
     state.drawingActive = false;
     el.annoTranscription.value = "";
+    if (el.annoMeaning) el.annoMeaning.value = "";
     renderAll();
     saveState();
   });
@@ -2351,7 +3000,9 @@ function bindEvents() {
     ["codepoint", "codepointMap", "codepointSourceMap", "glyphChar", "glyphIds", "glyphNote", "meaning", "transcriptionMeaning"].forEach((key) => {
       if (prevAttrs[key]) anno.attrs[key] = prevAttrs[key];
     });
-    anno.transcription = el.propNote.value.trim();
+    if (supportsMeaningAttrByTagId(anno.tagId)) {
+      anno.transcription = el.propNote.value.trim();
+    }
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();
