@@ -96,9 +96,11 @@ const el = {
   currentTargetHint: document.getElementById("currentTargetHint"),
   propsEditor: document.getElementById("propsEditor"),
   propNote: document.getElementById("propNote"),
+  propMeaning: document.getElementById("propMeaning"),
   unicodeAllocArea: document.getElementById("unicodeAllocArea"),
   propCodepoint: document.getElementById("propCodepoint"),
   unicodeHint: document.getElementById("unicodeHint"),
+  propMeaningAutoTranslateBtn: document.getElementById("propMeaningAutoTranslateBtn"),
   saveCurrentPropsBtn: document.getElementById("saveCurrentPropsBtn"),
   editModeArea: document.getElementById("editModeArea"),
   drawState: document.getElementById("drawState"),
@@ -107,6 +109,8 @@ const el = {
   glyphCharInput: document.getElementById("glyphCharInput"),
   glyphManualCodepointInput: document.getElementById("glyphManualCodepointInput"),
   glyphIdsInput: document.getElementById("glyphIdsInput"),
+  glyphIdsPatternSelect: document.getElementById("glyphIdsPatternSelect"),
+  glyphIdsPatternApplyBtn: document.getElementById("glyphIdsPatternApplyBtn"),
   glyphNoteInput: document.getElementById("glyphNoteInput"),
   glyphAutoSuggestBtn: document.getElementById("glyphAutoSuggestBtn"),
   glyphStartCreateBtn: document.getElementById("glyphStartCreateBtn"),
@@ -417,17 +421,48 @@ function isPuaCodepoint(cp) {
   return value >= GLYPH_PUA_START && value <= GLYPH_PUA_END;
 }
 
+function singleCharForGlyphLookup(text) {
+  const chars = [...String(text || "").trim()];
+  if (chars.length !== 1) return "";
+  return chars[0];
+}
+
+function toSimplifiedSingleChar(text) {
+  const raw = singleCharForGlyphLookup(text);
+  if (!raw) return "";
+  const converted = convertTraditionalToSimplified(raw);
+  const simplified = singleCharForGlyphLookup(converted?.text || "");
+  if (!simplified || simplified === "-") return raw;
+  return simplified;
+}
+
+function findGlyphRegistryByChar(glyphChar) {
+  const target = singleCharForGlyphLookup(glyphChar);
+  if (!target) return null;
+  return state.glyphRegistry.find((item) => singleCharForGlyphLookup(item.glyphChar) === target) || null;
+}
+
+function resolveRegisteredCodepoint(glyphChar) {
+  const simplified = toSimplifiedSingleChar(glyphChar);
+  const matched = findGlyphRegistryByChar(simplified);
+  if (!matched?.codepoint) return "";
+  return normalizeCodepointInput(matched.codepoint) || String(matched.codepoint).trim().toUpperCase();
+}
+
 function allocateGlyphCodepoint(glyphChar, manualCodepoint) {
   const used = usedCodepointSet();
   const manual = normalizeCodepointInput(manualCodepoint);
   if (manual) {
+    if (!isPuaCodepoint(manual)) return manual;
     if (used.has(manual)) throw new Error(`unicode已存在：${manual}`);
     return manual;
   }
 
+  const registered = resolveRegisteredCodepoint(glyphChar);
+  if (registered) return registered;
+
   const official = codepointFromSingleChar(glyphChar);
   if (official && !isPuaCodepoint(official)) {
-    if (used.has(official)) throw new Error(`unicode已存在：${official}`);
     return official;
   }
 
@@ -590,6 +625,21 @@ function captureGlyphDraft(rect) {
   };
 }
 
+function clearGlyphInputFields() {
+  if (el.glyphCharInput) el.glyphCharInput.value = "";
+  if (el.glyphManualCodepointInput) el.glyphManualCodepointInput.value = "";
+  if (el.glyphIdsInput) el.glyphIdsInput.value = "";
+  if (el.glyphNoteInput) el.glyphNoteInput.value = "";
+}
+
+function formatAccuracyLabel(confidence) {
+  if (confidence == null || confidence === "") return "";
+  const n = Number(confidence);
+  if (!Number.isFinite(n)) return "";
+  const pct = n <= 1 ? n * 100 : n;
+  return `准确率: ${pct.toFixed(1)}%`;
+}
+
 function createGlyphAnnoFromDraft() {
   const img = selectedImage();
   if (!img) throw new Error("请先选择图片");
@@ -642,6 +692,29 @@ function createGlyphAnnoFromDraft() {
   state.glyphRegistry = state.glyphRegistry.slice(0, 200);
 
   state.glyphDraft = null;
+  return anno;
+}
+
+async function persistGlyphRecordToServer(anno) {
+  if (!anno) return;
+  const payload = {
+    charGlyph: String(anno.attrs?.glyphChar || anno.transcription || "").trim(),
+    manualCodepoint: String(anno.attrs?.codepoint || "").trim(),
+    ids: String(anno.attrs?.glyphIds || "").trim(),
+    note: String(anno.attrs?.glyphNote || "").trim(),
+    imageDataUrl: String(anno.attrs?.glyphCropDataUrl || "")
+  };
+
+  const res = await fetch(`${API_BASE}/api/glyphs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || "写入数据库失败");
+  }
 }
 
 async function suggestGlyphByAI() {
@@ -672,6 +745,15 @@ async function suggestGlyphByAI() {
   const data = await res.json();
   const suggestion = data?.suggestion || data || {};
 
+  const recognizedChar = singleCharForGlyphLookup(suggestion.glyphChar || "");
+  const simplifiedChar = toSimplifiedSingleChar(recognizedChar);
+  const matchedRegistry = findGlyphRegistryByChar(simplifiedChar);
+  if (recognizedChar && simplifiedChar && matchedRegistry?.codepoint) {
+    suggestion.exists = true;
+    suggestion.glyphChar = simplifiedChar;
+    suggestion.codepoint = normalizeCodepointInput(matchedRegistry.codepoint) || matchedRegistry.codepoint;
+  }
+
   if (suggestion.glyphChar && el.glyphCharInput) {
     el.glyphCharInput.value = suggestion.glyphChar;
   }
@@ -682,18 +764,20 @@ async function suggestGlyphByAI() {
     el.glyphIdsInput.value = suggestion.ids;
   }
 
-  const confidence = suggestion.confidence != null ? ` 置信度:${Number(suggestion.confidence).toFixed(2)}` : "";
+  const accuracy = formatAccuracyLabel(suggestion.confidence);
   if (el.glyphCreateHint) {
     if (suggestion.exists) {
       const cp = suggestion.codepoint || "";
       const ids = suggestion.ids || "";
       if (el.glyphManualCodepointInput) el.glyphManualCodepointInput.value = cp;
       if (el.glyphIdsInput) el.glyphIdsInput.value = ids;
-      alert(`该字已被收录。\nunicode: ${cp || "(空)"}\nIDS: ${ids || "(空)"}`);
+      const accuracyLine = accuracy ? `\n${accuracy}` : "";
+      alert(`该字已被收录。\nunicode: ${cp || "(空)"}\nIDS: ${ids || "(空)"}${accuracyLine}`);
+      el.glyphCreateHint.textContent = accuracy || "该字已被收录，可直接保存";
     } else {
-      if (confidence) {
-        el.glyphCreateHint.textContent = `建议已填入 unicode/IDS。${confidence}`;
-      }
+      el.glyphCreateHint.textContent = accuracy
+        ? `建议已填入 unicode/IDS。${accuracy}`
+        : "建议已填入 unicode/IDS。";
     }
   }
 }
@@ -717,6 +801,13 @@ async function suggestTranscriptionByAI() {
     throw new Error("无法获取框选字图");
   }
 
+  const transcription = await requestTranscriptionSuggestion(imageDataUrl);
+  if (el.annoTranscription) {
+    el.annoTranscription.value = transcription;
+  }
+}
+
+async function requestTranscriptionSuggestion(imageDataUrl) {
   const payload = { imageDataUrl };
   const res = await fetch(`${API_BASE}/api/transcription/suggest`, {
     method: "POST",
@@ -735,9 +826,42 @@ async function suggestTranscriptionByAI() {
   if (!transcription) {
     throw new Error("AI未识别出简体结果，请手动填写");
   }
-  if (el.annoTranscription) {
-    el.annoTranscription.value = transcription;
+  return transcription;
+}
+
+async function suggestAttributeMeaning(attrName, attrValue, tagPath, transcription) {
+  const payload = {
+    attrName: String(attrName || "").trim(),
+    attrValue: String(attrValue || "").trim(),
+    tagPath: String(tagPath || "").trim(),
+    transcription: String(transcription || "").trim()
+  };
+
+  if (!payload.attrName) {
+    throw new Error("缺少属性名");
   }
+  if (!payload.attrValue && !payload.transcription) {
+    throw new Error("请先填写属性值或简体形式");
+  }
+
+  const res = await fetch(`${API_BASE}/api/attrs/meaning`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || "AI释义失败");
+  }
+
+  const data = await res.json();
+  const suggestion = data?.suggestion || data || {};
+  const meaning = String(suggestion.meaning || "").trim();
+  if (!meaning) {
+    throw new Error("AI未返回释义，请手动填写");
+  }
+  return meaning;
 }
 
 const TRADITIONAL_PHRASE_MAP = {
@@ -971,6 +1095,10 @@ function templateDepth(tagId) {
     cursor = cursor.parentId ? findTemplateTag(cursor.parentId) : null;
   }
   return depth;
+}
+
+function supportsMeaningAttrByTagId(tagId) {
+  return templateDepth(tagId) >= 3;
 }
 
 function pointInRect(rect, x, y) {
@@ -1420,6 +1548,12 @@ function renderPropsEditor() {
     });
     el.propNote.value = "";
     el.propNote.disabled = true;
+    if (el.propMeaning) {
+      el.propMeaning.value = "";
+      el.propMeaning.disabled = true;
+      el.propMeaning.placeholder = "";
+    }
+    if (el.propMeaningAutoTranslateBtn) el.propMeaningAutoTranslateBtn.disabled = true;
     el.propCodepoint.value = "";
     el.unicodeAllocArea.classList.remove("active");
     setUnicodeHint("仅 char 标签显示 unicode 码");
@@ -1429,6 +1563,7 @@ function renderPropsEditor() {
   el.propNote.disabled = false;
   el.currentTargetHint.textContent = `当前：框 (${anno.tagPath})`;
   const templateTag = findTemplateTag(anno.tagId);
+  const meaningEnabled = supportsMeaningAttrByTagId(anno.tagId);
   const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
   attrs.forEach((key) => {
     const row = document.createElement("div");
@@ -1445,6 +1580,20 @@ function renderPropsEditor() {
     el.propsEditor.appendChild(row);
   });
   el.propNote.value = anno.transcription || "";
+  if (el.propMeaning) {
+    if (meaningEnabled) {
+      el.propMeaning.disabled = false;
+      el.propMeaning.placeholder = "框内古文内容翻译";
+      el.propMeaning.value = anno.attrs?.meaning || anno.attrs?.transcriptionMeaning || "";
+    } else {
+      el.propMeaning.value = "";
+      el.propMeaning.disabled = true;
+      el.propMeaning.placeholder = "";
+    }
+  }
+  if (el.propMeaningAutoTranslateBtn) {
+    el.propMeaningAutoTranslateBtn.disabled = !meaningEnabled;
+  }
 
   if (isCharTagAnno(anno)) {
     el.propCodepoint.value = anno.attrs?.codepoint || "";
@@ -1743,6 +1892,11 @@ function bindDrawEvents() {
 
   el.drawLayer.addEventListener("mousedown", (evt) => {
     if ((!state.drawingActive && !state.glyphCreateActive) || !selectedImage()) return;
+    if (state.glyphCreateActive) {
+      clearGlyphInputFields();
+    } else if (el.annoTranscription) {
+      el.annoTranscription.value = "";
+    }
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((evt.clientX - rect.left) / rect.width);
     const y = clamp01((evt.clientY - rect.top) / rect.height);
@@ -1982,14 +2136,33 @@ function bindEvents() {
     });
   }
 
+  if (el.glyphIdsPatternApplyBtn) {
+    el.glyphIdsPatternApplyBtn.addEventListener("click", () => {
+      const pattern = el.glyphIdsPatternSelect?.value || "";
+      if (!pattern || !el.glyphIdsInput) return;
+      el.glyphIdsInput.value = `${el.glyphIdsInput.value || ""}${pattern}`;
+      el.glyphIdsInput.focus();
+    });
+  }
+
   if (el.glyphAssignSaveBtn) {
-    el.glyphAssignSaveBtn.addEventListener("click", () => {
+    el.glyphAssignSaveBtn.addEventListener("click", async () => {
+      const original = el.glyphAssignSaveBtn.textContent;
+      el.glyphAssignSaveBtn.disabled = true;
+      el.glyphAssignSaveBtn.textContent = "保存中...";
       try {
-        createGlyphAnnoFromDraft();
+        const createdAnno = createGlyphAnnoFromDraft();
+        await persistGlyphRecordToServer(createdAnno);
         renderAll();
         saveState();
+        if (el.glyphCreateHint) {
+          el.glyphCreateHint.textContent = "已保存到本地和数据库";
+        }
       } catch (err) {
         alert(err?.message || "保存造字失败");
+      } finally {
+        el.glyphAssignSaveBtn.disabled = false;
+        el.glyphAssignSaveBtn.textContent = original;
       }
     });
   }
@@ -2006,6 +2179,46 @@ function bindEvents() {
       } finally {
         el.annoAutoSuggestBtn.disabled = false;
         el.annoAutoSuggestBtn.textContent = original;
+      }
+    });
+  }
+
+  if (el.propMeaningAutoTranslateBtn) {
+    el.propMeaningAutoTranslateBtn.addEventListener("click", async () => {
+      const anno = selectedAnno();
+      if (!anno) {
+        alert("请先选中一个框");
+        return;
+      }
+      if (!supportsMeaningAttrByTagId(anno.tagId)) {
+        alert("仅模板树第3层及以下标签支持释义");
+        return;
+      }
+
+      const original = el.propMeaningAutoTranslateBtn.textContent;
+      el.propMeaningAutoTranslateBtn.disabled = true;
+      el.propMeaningAutoTranslateBtn.textContent = "翻译中...";
+      try {
+        const imageDataUrl = cropRectToDataUrl(anno.rect);
+        if (!imageDataUrl) {
+          throw new Error("无法读取当前框对应图片");
+        }
+        const sourceText = await requestTranscriptionSuggestion(imageDataUrl);
+        if (el.propNote) el.propNote.value = sourceText;
+        const meaning = await suggestAttributeMeaning(
+          "meaning",
+          sourceText,
+          anno.tagPath,
+          sourceText
+        );
+        if (el.propMeaning) {
+          el.propMeaning.value = meaning;
+        }
+      } catch (err) {
+        alert(err?.message || "自动翻译失败");
+      } finally {
+        el.propMeaningAutoTranslateBtn.disabled = false;
+        el.propMeaningAutoTranslateBtn.textContent = original;
       }
     });
   }
@@ -2130,9 +2343,12 @@ function bindEvents() {
     Object.keys(state.propInputs).forEach((key) => {
       setIfNotEmpty(nextAttrs, key, state.propInputs[key].value);
     });
+    if (supportsMeaningAttrByTagId(anno.tagId)) {
+      setIfNotEmpty(nextAttrs, "meaning", el.propMeaning?.value || "");
+    }
     const prevAttrs = { ...(anno.attrs || {}) };
     anno.attrs = nextAttrs;
-    ["codepoint", "codepointMap", "codepointSourceMap", "glyphChar", "glyphIds", "glyphNote"].forEach((key) => {
+    ["codepoint", "codepointMap", "codepointSourceMap", "glyphChar", "glyphIds", "glyphNote", "meaning", "transcriptionMeaning"].forEach((key) => {
       if (prevAttrs[key]) anno.attrs[key] = prevAttrs[key];
     });
     anno.transcription = el.propNote.value.trim();

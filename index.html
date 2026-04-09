@@ -64,13 +64,19 @@
             <label>简体形式
               <textarea id="propNote" rows="2" placeholder="框内简体形式"></textarea>
             </label>
+            <label>释义
+              <textarea id="propMeaning" rows="2" placeholder="框内古文内容翻译"></textarea>
+            </label>
             <div id="unicodeAllocArea" class="hidden-block">
               <label>unicode码
                 <input id="propCodepoint" type="text" placeholder="例如：U+E000" readonly />
               </label>
               <div id="unicodeHint" class="muted">选中框后可为未收录字分配编码</div>
             </div>
-            <button id="saveCurrentPropsBtn">保存当前对象属性</button>
+            <div class="row-actions">
+              <button id="propMeaningAutoTranslateBtn" type="button">自动翻译</button>
+              <button id="saveCurrentPropsBtn" type="button">保存</button>
+            </div>
           </div>
 
           <div class="section panel-section" id="sectionDraw" data-panel="draw">
@@ -180,14 +186,31 @@
             <label>指定 unicode
               <input id="glyphManualCodepointInput" type="text" placeholder="例如：U+E123" />
             </label>
-            <label>IDS（可选）
-              <input id="glyphIdsInput" type="text" placeholder="例如：⿰氵𡿺" />
+            <label>IDS（后续可补上）
+              <div class="inline-action-row ids-inline-row">
+                <input id="glyphIdsInput" type="text" placeholder="例如：⿰氵𡿺" />
+                <select id="glyphIdsPatternSelect">
+                  <option value="⿰">⿰ 左右结构</option>
+                  <option value="⿱">⿱ 上下结构</option>
+                  <option value="⿲">⿲ 左中右结构</option>
+                  <option value="⿳">⿳ 上中下结构</option>
+                  <option value="⿴">⿴ 全包围结构</option>
+                  <option value="⿵">⿵ 上三包围结构</option>
+                  <option value="⿶">⿶ 下三包围结构</option>
+                  <option value="⿷">⿷ 左三包围结构</option>
+                  <option value="⿸">⿸ 左上包围结构</option>
+                  <option value="⿹">⿹ 右上包围结构</option>
+                  <option value="⿺">⿺ 左下包围结构</option>
+                  <option value="⿻">⿻ 镶嵌/重叠结构</option>
+                </select>
+                <button id="glyphIdsPatternApplyBtn" class="compact-btn" type="button">插入结构</button>
+              </div>
             </label>
             <label>备注（可选）
               <input id="glyphNoteInput" type="text" placeholder="备注信息" />
             </label>
 
-            <button id="glyphAutoSuggestBtn" class="compact-btn" type="button">自动生成识别</button>
+            <button id="glyphAutoSuggestBtn" class="compact-btn" type="button">自动识别</button>
 
             <div class="row-actions">
               <button id="glyphStartCreateBtn" class="primary" type="button">开始造字</button>

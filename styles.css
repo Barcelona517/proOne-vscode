@@ -372,6 +372,10 @@ body {
   margin-top: 0;
 }
 
+.ids-inline-row {
+  grid-template-columns: minmax(0, 1fr) minmax(94px, 110px) auto;
+}
+
 .compact-btn {
   width: auto;
   margin: 0;
@@ -427,6 +431,16 @@ body {
 
 .prop-row input {
   margin-top: 0;
+}
+
+.prop-row-with-action {
+  grid-template-columns: 88px minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.prop-row-with-action textarea {
+  margin-top: 0;
+  min-height: 56px;
 }
 
 label {

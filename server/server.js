@@ -251,6 +251,80 @@ app.post("/api/transcription/suggest", async (req, res) => {
   }
 });
 
+app.post("/api/attrs/meaning", async (req, res) => {
+  try {
+    const attrName = String(req.body?.attrName || "").trim();
+    const attrValue = String(req.body?.attrValue || "").trim();
+    const tagPath = String(req.body?.tagPath || "").trim();
+    const transcription = String(req.body?.transcription || "").trim();
+
+    if (!attrName) {
+      res.status(400).send("缺少 attrName");
+      return;
+    }
+    if (!attrValue && !transcription) {
+      res.status(400).send("缺少可用于释义的内容");
+      return;
+    }
+    if (!arkClient) {
+      res.status(501).send("未配置 DOUBAO_API_KEY，暂无法调用 AI 释义。请手动填写释义。");
+      return;
+    }
+
+    const prompt = [
+      "你是古籍标注释义助手。",
+      "请根据给定字段生成简短、准确的中文释义。",
+      "只返回严格 JSON，不要输出任何额外文本。",
+      "JSON 字段：meaning, confidence。",
+      "要求：",
+      "1) meaning 用现代中文解释该字段含义，尽量 8 到 40 字；",
+      "2) 若信息不足，基于字段名给出通用释义；",
+      "3) confidence 为 0 到 1 的小数。",
+      `标签路径: ${tagPath || "(空)"}`,
+      `属性名: ${attrName}`,
+      `属性值: ${attrValue || "(空)"}`,
+      `简体文本: ${transcription || "(空)"}`
+    ].join("\n");
+
+    const response = await arkClient.createResponses({
+      model: doubaoModel,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt }
+          ]
+        }
+      ]
+    });
+
+    const raw = extractResponseText(response) || "{}";
+    let parsed;
+    try {
+      parsed = JSON.parse(String(raw));
+    } catch (_) {
+      const fallback = String(raw).match(/\{[\s\S]*\}/);
+      parsed = fallback ? JSON.parse(fallback[0]) : {};
+    }
+
+    const suggestion = {
+      meaning: String(parsed?.meaning || "").trim(),
+      confidence: Number.isFinite(Number(parsed?.confidence)) ? Number(parsed.confidence) : 0
+    };
+
+    res.json({ suggestion });
+  } catch (err) {
+    const modelTip = `当前模型配置: ${doubaoModel}`;
+    const detail = [
+      err?.message || "释义失败",
+      err?.code ? `code=${err.code}` : "",
+      err?.requestId ? `requestId=${err.requestId}` : "",
+      modelTip
+    ].filter(Boolean).join(" | ");
+    res.status(400).send(detail);
+  }
+});
+
 app.post("/api/layout/suggest", async (req, res) => {
   try {
     const imageDataUrl = String(req.body?.imageDataUrl || "");
