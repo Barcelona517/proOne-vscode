@@ -7,6 +7,8 @@ const DB_STORE_BOOKS_META = "books_meta";
 const DB_STORE_BOOKS_DATA = "books_data";
 const DB_STORE_KV = "kv";
 const STORAGE_MIGRATED_FLAG = `${STORAGE_KEY}_migrated_to_idb_v1`;
+const LAST_OPENED_BOOK_KEY = `${STORAGE_KEY}_last_opened_book_id`;
+const LAST_VIEW_KEY = `${STORAGE_KEY}_last_view`;
 const GLYPH_PUA_START = 0xE000;
 const GLYPH_PUA_END = 0xF8FF;
 const API_BASE = `${window.location.protocol}//${window.location.hostname}:3000`;
@@ -316,6 +318,26 @@ async function dbGetFlag(key) {
 
 async function dbSetFlag(key, value) {
   return idbPut(DB_STORE_KV, { key, value });
+}
+
+async function setLastOpenedBookId(bookId) {
+  await dbSetFlag(LAST_OPENED_BOOK_KEY, String(bookId || ""));
+}
+
+async function getLastOpenedBookId() {
+  const value = await dbGetFlag(LAST_OPENED_BOOK_KEY);
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+async function setLastView(viewName) {
+  const nextView = viewName === "editor" ? "editor" : "library";
+  await dbSetFlag(LAST_VIEW_KEY, nextView);
+}
+
+async function getLastView() {
+  const value = String(await dbGetFlag(LAST_VIEW_KEY) || "").trim().toLowerCase();
+  return value === "editor" ? "editor" : "library";
 }
 
 function loadBooksIndex() {
@@ -2138,6 +2160,8 @@ async function openBookById(bookId) {
   }
   applyBookData(parsed);
   currentBookId = bookId;
+  await setLastOpenedBookId(bookId);
+  await setLastView("editor");
   showEditorView();
   renderAll();
 }
@@ -2178,8 +2202,13 @@ async function deleteBookRecord(bookId) {
   saveBooksIndex(nextBooks);
   await dbDeleteBookData(bookId);
   await persistBooksIndex();
+  const lastOpenedId = await getLastOpenedBookId();
+  if (lastOpenedId === bookId) {
+    await setLastOpenedBookId("");
+  }
   if (currentBookId === bookId) {
     currentBookId = null;
+    await setLastView("library");
   }
 }
 
@@ -2267,10 +2296,21 @@ async function loadState() {
     const data = createDefaultBookData();
     applyBookData(data);
     currentBookId = null;
+    await setLastView("library");
+    await setLastOpenedBookId("");
     showLibraryView();
     renderBooksList();
     return;
   }
+
+  const lastView = await getLastView();
+  const lastOpenedBookId = await getLastOpenedBookId();
+  if (lastView === "editor" && lastOpenedBookId && books.some((book) => book.id === lastOpenedBookId)) {
+    await openBookById(lastOpenedBookId);
+    return;
+  }
+
+  await setLastView("library");
   showLibraryView();
   renderBooksList();
 }
@@ -3219,6 +3259,7 @@ function bindEvents() {
   if (el.backToLibraryBtn) {
     el.backToLibraryBtn.addEventListener("click", async () => {
       await saveState({ wait: true });
+      await setLastView("library");
       renderBooksList();
       showLibraryView();
     });
