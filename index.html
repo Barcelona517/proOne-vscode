@@ -7,10 +7,28 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <div id="libraryShell" class="library-shell">
+    <header class="library-topbar">
+      <h1>古籍书籍库</h1>
+      <div class="topbar-actions">
+        <span id="authUserLabel" class="muted"></span>
+        <button id="authOpenBtn" class="mini-btn" type="button">协作登录</button>
+        <button id="authLogoutBtn" class="mini-btn hidden" type="button">退出协作</button>
+        <input id="libraryImportInput" type="file" accept="image/*,.pdf,application/pdf,.xml,text/xml,application/xml" class="hidden" />
+        <button id="newBookBtn" class="primary" type="button">新建</button>
+      </div>
+    </header>
+    <main class="library-main">
+      <div id="booksList" class="books-list"></div>
+    </main>
+  </div>
+
   <div class="app-shell">
     <header class="topbar">
+      <button id="backToLibraryBtn" class="mini-btn" type="button">返回</button>
       <h1>古籍 Online Editor</h1>
       <div class="topbar-actions">
+        <button id="shareBookBtn" class="mini-btn hidden" type="button">共享书籍</button>
         <input id="uploadInput" type="file" accept="image/*,.pdf,application/pdf" class="hidden" />
         <button id="exportXmlBtn" class="primary" type="button">导出文件</button>
       </div>
@@ -240,6 +258,26 @@
         <button id="exportAsCsvBtn" type="button">导出生僻字表格</button>
       </div>
       <button id="cancelExportFormatBtn" class="mini-btn" type="button">取消</button>
+    </div>
+  </div>
+
+  <div id="authModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+    <div class="modal-card">
+      <div id="authModalTitle" class="section-title">协作登录</div>
+      <label>邮箱
+        <input id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+      </label>
+      <label>密码
+        <input id="authPasswordInput" type="password" placeholder="请输入密码" autocomplete="current-password" />
+      </label>
+      <label>昵称（注册时可选）
+        <input id="authDisplayNameInput" type="text" placeholder="例如：小王" autocomplete="nickname" />
+      </label>
+      <div class="row-actions">
+        <button id="authLoginSubmitBtn" class="primary" type="button">登录</button>
+        <button id="authRegisterSubmitBtn" type="button">注册</button>
+      </div>
+      <button id="authCancelBtn" class="mini-btn" type="button">取消</button>
     </div>
   </div>
 

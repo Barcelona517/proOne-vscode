@@ -94,6 +94,20 @@ body {
   background: #fff1ed;
 }
 
+#authUserLabel {
+  font-size: 12px;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#shareBookBtn {
+  border-color: #7ca6b8;
+  background: #eef7fb;
+  color: #255d74;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -756,6 +770,10 @@ hr {
 
 .modal-card .mini-btn {
   margin-top: 8px;
+}
+
+#authModal .modal-card {
+  width: min(420px, calc(100vw - 24px));
 }
 
 @media (max-width: 1100px) {

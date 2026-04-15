@@ -9,6 +9,7 @@ const DB_STORE_KV = "kv";
 const STORAGE_MIGRATED_FLAG = `${STORAGE_KEY}_migrated_to_idb_v1`;
 const LAST_OPENED_BOOK_KEY = `${STORAGE_KEY}_last_opened_book_id`;
 const LAST_VIEW_KEY = `${STORAGE_KEY}_last_view`;
+const AUTH_TOKEN_KEY = `${STORAGE_KEY}_auth_token`;
 const GLYPH_PUA_START = 0xE000;
 const GLYPH_PUA_END = 0xF8FF;
 const API_BASE = `${window.location.protocol}//${window.location.hostname}:3000`;
@@ -17,6 +18,14 @@ let currentBookId = null;
 let booksIndexCache = [];
 let saveStateQueue = Promise.resolve();
 let dbPromise = null;
+const collabState = {
+  token: String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim(),
+  user: null,
+  ws: null,
+  wsConnected: false,
+  currentBookVersion: 0,
+  pendingWsSave: null
+};
 
 const seedImages = [
   { path: "古籍示例/顶格/试验样例-00000002-00008.jpg", category: "顶格", element: "text", kind: "文字" },
@@ -97,6 +106,17 @@ const el = {
   newBookBtn: document.getElementById("newBookBtn"),
   libraryImportInput: document.getElementById("libraryImportInput"),
   backToLibraryBtn: document.getElementById("backToLibraryBtn"),
+  authUserLabel: document.getElementById("authUserLabel"),
+  authOpenBtn: document.getElementById("authOpenBtn"),
+  authLogoutBtn: document.getElementById("authLogoutBtn"),
+  shareBookBtn: document.getElementById("shareBookBtn"),
+  authModal: document.getElementById("authModal"),
+  authEmailInput: document.getElementById("authEmailInput"),
+  authPasswordInput: document.getElementById("authPasswordInput"),
+  authDisplayNameInput: document.getElementById("authDisplayNameInput"),
+  authLoginSubmitBtn: document.getElementById("authLoginSubmitBtn"),
+  authRegisterSubmitBtn: document.getElementById("authRegisterSubmitBtn"),
+  authCancelBtn: document.getElementById("authCancelBtn"),
   thumbList: document.getElementById("thumbList"),
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
@@ -185,6 +205,239 @@ function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(
 function encodePath(path) { return path.split("/").map((part) => encodeURIComponent(part)).join("/"); }
 function fileToDisplayName(path) { return path.split("/").pop() || path; }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+function isCollabMode() {
+  return !!collabState.token;
+}
+
+function setCollabToken(token) {
+  collabState.token = String(token || "").trim();
+  if (collabState.token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, collabState.token);
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  }
+}
+
+function getAuthHeaders(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  if (collabState.token) {
+    headers.Authorization = `Bearer ${collabState.token}`;
+  }
+  return headers;
+}
+
+async function collabFetch(path, options = {}) {
+  const method = options.method || "GET";
+  const headers = getAuthHeaders(options.headers || {});
+  const init = { ...options, method, headers };
+  const res = await fetch(`${API_BASE}${path}`, init);
+  if (!res.ok) {
+    const raw = await res.text();
+    let msg = raw;
+    try {
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object" && parsed.error) {
+        msg = parsed.error;
+      }
+    } catch (_) {
+      // keep raw text
+    }
+    if (res.status === 401) {
+      setCollabToken("");
+      collabState.user = null;
+      closeCollabSocket();
+      updateAuthUi();
+      showAuthModal();
+    }
+    throw new Error(msg || `请求失败: ${res.status}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
+}
+
+function updateAuthUi() {
+  if (el.authUserLabel) {
+    el.authUserLabel.textContent = collabState.user
+      ? `协作用户：${collabState.user.displayName || collabState.user.email || "已登录"}`
+      : "本地模式";
+  }
+  if (el.authOpenBtn) el.authOpenBtn.classList.toggle("hidden", !!collabState.user);
+  if (el.authLogoutBtn) el.authLogoutBtn.classList.toggle("hidden", !collabState.user);
+  if (el.shareBookBtn) el.shareBookBtn.classList.toggle("hidden", !collabState.user || !currentBookId);
+}
+
+function showAuthModal() {
+  if (!el.authModal) return;
+  el.authModal.classList.remove("hidden");
+}
+
+function hideAuthModal() {
+  if (!el.authModal) return;
+  el.authModal.classList.add("hidden");
+}
+
+async function bootstrapAuthUser() {
+  if (!collabState.token) {
+    collabState.user = null;
+    updateAuthUi();
+    return;
+  }
+  try {
+    const data = await collabFetch("/api/auth/me");
+    collabState.user = data?.user || null;
+  } catch (_) {
+    setCollabToken("");
+    collabState.user = null;
+  }
+  updateAuthUi();
+}
+
+function closeCollabSocket() {
+  if (collabState.ws) {
+    try { collabState.ws.close(); } catch (_) {}
+  }
+  collabState.ws = null;
+  collabState.wsConnected = false;
+  if (collabState.pendingWsSave?.reject) {
+    collabState.pendingWsSave.reject(new Error("协作连接已断开"));
+  }
+  collabState.pendingWsSave = null;
+}
+
+function updateBookMetaFromCollabBook(book) {
+  if (!book?.id) return;
+  const books = loadBooksIndex();
+  const idx = books.findIndex((item) => item.id === book.id);
+  const nextMeta = {
+    id: book.id,
+    name: book.name || "未命名书籍",
+    createdAt: book.createdAt || new Date().toISOString(),
+    updatedAt: book.updatedAt || new Date().toISOString(),
+    imageCount: Array.isArray(book.payload?.images) ? book.payload.images.length : 0,
+    ownerUserId: book.ownerUserId || "",
+    role: book.role || "viewer",
+    version: Number(book.version || 1)
+  };
+  if (idx >= 0) books[idx] = { ...books[idx], ...nextMeta };
+  else books.unshift(nextMeta);
+  saveBooksIndex(books);
+}
+
+function connectCollabSocket() {
+  if (!isCollabMode()) return;
+  if (collabState.ws && (collabState.ws.readyState === WebSocket.OPEN || collabState.ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const url = `${proto}://${window.location.hostname}:3000/ws?token=${encodeURIComponent(collabState.token)}`;
+  const ws = new WebSocket(url);
+  collabState.ws = ws;
+
+  ws.addEventListener("open", () => {
+    collabState.wsConnected = true;
+    if (currentBookId) {
+      ws.send(JSON.stringify({ type: "subscribe", bookId: currentBookId }));
+    }
+  });
+
+  ws.addEventListener("close", () => {
+    collabState.wsConnected = false;
+    if (collabState.ws === ws) {
+      collabState.ws = null;
+    }
+  });
+
+  ws.addEventListener("error", () => {
+    collabState.wsConnected = false;
+  });
+
+  ws.addEventListener("message", (evt) => {
+    try {
+      const msg = JSON.parse(String(evt.data || "{}"));
+      if (msg.type === "subscribed" && msg.book) {
+        updateBookMetaFromCollabBook(msg.book);
+        collabState.currentBookVersion = Number(msg.book.version || collabState.currentBookVersion || 1);
+        renderBooksList();
+        return;
+      }
+      if (msg.type === "book_updated" && msg.book) {
+        updateBookMetaFromCollabBook(msg.book);
+        if (msg.book.id === currentBookId) {
+          const nextVersion = Number(msg.book.version || 1);
+          const pending = collabState.pendingWsSave;
+          if (pending && pending.bookId === msg.book.id) {
+            collabState.pendingWsSave = null;
+            collabState.currentBookVersion = nextVersion;
+            pending.resolve(msg.book);
+            return;
+          }
+          if (nextVersion > collabState.currentBookVersion) {
+            collabState.currentBookVersion = nextVersion;
+            applyBookData(msg.book.payload || {});
+            renderAll();
+          }
+        }
+        renderBooksList();
+      }
+    } catch (_) {
+      // ignore malformed ws payload
+    }
+  });
+}
+
+function sendWsSaveBook(bookId, name, payload, baseVersion) {
+  const ws = collabState.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error("协作连接未就绪"));
+  }
+  if (collabState.pendingWsSave) {
+    return Promise.reject(new Error("上一次协作保存尚未完成"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      if (collabState.pendingWsSave?.reject) {
+        const p = collabState.pendingWsSave;
+        collabState.pendingWsSave = null;
+        p.reject(new Error("协作保存超时，请重试"));
+      }
+    }, 8000);
+
+    collabState.pendingWsSave = {
+      bookId,
+      resolve: (book) => {
+        window.clearTimeout(timeoutId);
+        resolve(book);
+      },
+      reject: (err) => {
+        window.clearTimeout(timeoutId);
+        reject(err);
+      }
+    };
+
+    ws.send(JSON.stringify({
+      type: "update_book",
+      bookId,
+      name,
+      payload,
+      baseVersion
+    }));
+  });
+}
+
+async function reloadWorkspaceByMode() {
+  state.selectedAnnoId = null;
+  state.selectedTagFilterName = "";
+  state.pendingDrafts = [];
+  state.draftRect = null;
+  currentBookId = null;
+  collabState.currentBookVersion = 0;
+  await loadState();
+  renderAll();
+  updateAuthUi();
+}
 
 function bookDataKey(bookId) {
   return `${BOOK_DATA_KEY_PREFIX}${bookId}`;
@@ -2132,6 +2385,54 @@ function saveState(options = {}) {
   if (!currentBookId) return Promise.resolve();
   const wait = !!options.wait;
   const payload = collectCurrentBookData();
+
+  if (isCollabMode()) {
+    const nextTask = async () => {
+      let updatedBook;
+      const books = loadBooksIndex();
+      const meta = books.find((item) => item.id === currentBookId);
+      const nextName = meta?.name || "未命名书籍";
+      const baseVersion = Number(meta?.version || collabState.currentBookVersion || 1);
+      if (collabState.wsConnected) {
+        try {
+          updatedBook = await sendWsSaveBook(currentBookId, nextName, payload, baseVersion);
+        } catch (_) {
+          const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: nextName,
+              payload,
+              baseVersion
+            })
+          });
+          updatedBook = data?.book;
+        }
+      } else {
+        const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: nextName,
+            payload,
+            baseVersion
+          })
+        });
+        updatedBook = data?.book;
+      }
+
+      if (updatedBook) {
+        collabState.currentBookVersion = Number(updatedBook.version || collabState.currentBookVersion || 1);
+        updateBookMetaFromCollabBook(updatedBook);
+      }
+    };
+
+    saveStateQueue = saveStateQueue.then(nextTask).catch((err) => {
+      reportSaveError(err);
+    });
+    return wait ? saveStateQueue : Promise.resolve();
+  }
+
   const nextTask = async () => {
     await dbSaveBookData(currentBookId, payload);
     const books = loadBooksIndex();
@@ -2153,20 +2454,56 @@ async function openBookById(bookId) {
   if (currentBookId && currentBookId !== bookId) {
     await saveState({ wait: true });
   }
-  const parsed = await dbLoadBookData(bookId);
-  if (!parsed) {
-    alert("书籍数据不存在");
-    return;
+
+  let parsed = null;
+  if (isCollabMode()) {
+    const data = await collabFetch(`/api/collab/books/${bookId}`);
+    const book = data?.book;
+    if (!book) {
+      alert("书籍数据不存在");
+      return;
+    }
+    parsed = book.payload || {};
+    collabState.currentBookVersion = Number(book.version || 1);
+    updateBookMetaFromCollabBook(book);
+    connectCollabSocket();
+    if (collabState.ws && collabState.ws.readyState === WebSocket.OPEN) {
+      collabState.ws.send(JSON.stringify({ type: "subscribe", bookId }));
+    }
+  } else {
+    parsed = await dbLoadBookData(bookId);
+    if (!parsed) {
+      alert("书籍数据不存在");
+      return;
+    }
   }
+
   applyBookData(parsed);
   currentBookId = bookId;
   await setLastOpenedBookId(bookId);
   await setLastView("editor");
   showEditorView();
+  updateAuthUi();
   renderAll();
 }
 
 async function createBookRecord(name, data) {
+  if (isCollabMode()) {
+    const res = await collabFetch("/api/collab/books", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: String(name || "").trim() || "未命名书籍",
+        payload: data || {}
+      })
+    });
+    const book = res?.book;
+    if (!book?.id) throw new Error("创建书籍失败");
+    updateBookMetaFromCollabBook(book);
+    collabState.currentBookVersion = Number(book.version || 1);
+    return book.id;
+  }
+
   const books = loadBooksIndex();
   const bookId = uid("book");
   const now = new Date().toISOString();
@@ -2184,6 +2521,30 @@ async function createBookRecord(name, data) {
 }
 
 async function renameBookRecord(bookId, nextName) {
+  if (isCollabMode()) {
+    const normalized = String(nextName || "").trim();
+    if (!normalized) throw new Error("书籍名称不能为空");
+    const detail = await collabFetch(`/api/collab/books/${bookId}`);
+    const currentBook = detail?.book;
+    if (!currentBook) throw new Error("书籍不存在");
+    const updated = await collabFetch(`/api/collab/books/${bookId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: normalized,
+        payload: currentBook.payload || {},
+        baseVersion: Number(currentBook.version || 1)
+      })
+    });
+    if (updated?.book) {
+      updateBookMetaFromCollabBook(updated.book);
+      if (currentBookId === bookId) {
+        collabState.currentBookVersion = Number(updated.book.version || collabState.currentBookVersion || 1);
+      }
+    }
+    return;
+  }
+
   const books = loadBooksIndex();
   const idx = books.findIndex((item) => item.id === bookId);
   if (idx < 0) throw new Error("书籍不存在");
@@ -2196,6 +2557,22 @@ async function renameBookRecord(bookId, nextName) {
 }
 
 async function deleteBookRecord(bookId) {
+  if (isCollabMode()) {
+    await collabFetch(`/api/collab/books/${bookId}`, { method: "DELETE" });
+    const books = loadBooksIndex().filter((item) => item.id !== bookId);
+    saveBooksIndex(books);
+    const lastOpenedId = await getLastOpenedBookId();
+    if (lastOpenedId === bookId) {
+      await setLastOpenedBookId("");
+    }
+    if (currentBookId === bookId) {
+      currentBookId = null;
+      collabState.currentBookVersion = 0;
+      await setLastView("library");
+    }
+    return;
+  }
+
   const books = loadBooksIndex();
   const nextBooks = books.filter((item) => item.id !== bookId);
   if (nextBooks.length === books.length) throw new Error("书籍不存在");
@@ -2287,6 +2664,45 @@ function renderBooksList() {
 }
 
 async function loadState() {
+  if (isCollabMode()) {
+    booksIndexCache = [];
+    const resp = await collabFetch("/api/collab/books");
+    const books = Array.isArray(resp?.books) ? resp.books : [];
+    saveBooksIndex(books.map((book) => ({
+      id: book.id,
+      name: book.name || "未命名书籍",
+      createdAt: book.createdAt || new Date().toISOString(),
+      updatedAt: book.updatedAt || new Date().toISOString(),
+      imageCount: Array.isArray(book.payload?.images) ? book.payload.images.length : 0,
+      ownerUserId: book.ownerUserId || "",
+      role: book.role || "viewer",
+      version: Number(book.version || 1)
+    })));
+    const indexBooks = loadBooksIndex();
+    if (indexBooks.length === 0) {
+      currentBookId = null;
+      await setLastView("library");
+      await setLastOpenedBookId("");
+      showLibraryView();
+      updateAuthUi();
+      renderBooksList();
+      return;
+    }
+
+    const lastView = await getLastView();
+    const lastOpenedBookId = await getLastOpenedBookId();
+    if (lastView === "editor" && lastOpenedBookId && indexBooks.some((book) => book.id === lastOpenedBookId)) {
+      await openBookById(lastOpenedBookId);
+      return;
+    }
+
+    await setLastView("library");
+    showLibraryView();
+    updateAuthUi();
+    renderBooksList();
+    return;
+  }
+
   await openStorageDb();
   booksIndexCache = await dbLoadBooksIndex();
   await migrateLocalStorageBooksIfNeeded();
@@ -2299,6 +2715,7 @@ async function loadState() {
     await setLastView("library");
     await setLastOpenedBookId("");
     showLibraryView();
+    updateAuthUi();
     renderBooksList();
     return;
   }
@@ -2312,6 +2729,7 @@ async function loadState() {
 
   await setLastView("library");
   showLibraryView();
+  updateAuthUi();
   renderBooksList();
 }
 
@@ -3262,6 +3680,122 @@ function bindEvents() {
       await setLastView("library");
       renderBooksList();
       showLibraryView();
+      updateAuthUi();
+    });
+  }
+
+  if (el.authOpenBtn) {
+    el.authOpenBtn.addEventListener("click", () => {
+      showAuthModal();
+    });
+  }
+
+  if (el.authCancelBtn) {
+    el.authCancelBtn.addEventListener("click", () => {
+      hideAuthModal();
+    });
+  }
+
+  if (el.authLogoutBtn) {
+    el.authLogoutBtn.addEventListener("click", async () => {
+      setCollabToken("");
+      collabState.user = null;
+      closeCollabSocket();
+      hideAuthModal();
+      await reloadWorkspaceByMode();
+    });
+  }
+
+  if (el.authModal) {
+    el.authModal.addEventListener("click", (evt) => {
+      if (evt.target === el.authModal) {
+        hideAuthModal();
+      }
+    });
+  }
+
+  async function submitAuth(kind) {
+    const email = String(el.authEmailInput?.value || "").trim();
+    const password = String(el.authPasswordInput?.value || "");
+    const displayName = String(el.authDisplayNameInput?.value || "").trim();
+    if (!email || !password) {
+      alert("请输入邮箱和密码");
+      return;
+    }
+    const targetBtn = kind === "login" ? el.authLoginSubmitBtn : el.authRegisterSubmitBtn;
+    const originalText = targetBtn?.textContent || "提交";
+    if (targetBtn) {
+      targetBtn.disabled = true;
+      targetBtn.textContent = kind === "login" ? "登录中..." : "注册中...";
+    }
+
+    try {
+      const body = { email, password };
+      if (kind === "register" && displayName) body.displayName = displayName;
+      const data = await collabFetch(`/api/auth/${kind === "login" ? "login" : "register"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      setCollabToken(data?.token || "");
+      collabState.user = data?.user || null;
+      if (!collabState.token || !collabState.user) {
+        throw new Error("登录状态无效，请重试");
+      }
+      connectCollabSocket();
+      hideAuthModal();
+      await reloadWorkspaceByMode();
+    } catch (err) {
+      alert(err?.message || (kind === "login" ? "登录失败" : "注册失败"));
+    } finally {
+      if (targetBtn) {
+        targetBtn.disabled = false;
+        targetBtn.textContent = originalText;
+      }
+    }
+  }
+
+  if (el.authLoginSubmitBtn) {
+    el.authLoginSubmitBtn.addEventListener("click", async () => {
+      await submitAuth("login");
+    });
+  }
+
+  if (el.authRegisterSubmitBtn) {
+    el.authRegisterSubmitBtn.addEventListener("click", async () => {
+      await submitAuth("register");
+    });
+  }
+
+  if (el.shareBookBtn) {
+    el.shareBookBtn.addEventListener("click", async () => {
+      if (!currentBookId) {
+        alert("请先打开一本书籍");
+        return;
+      }
+      if (!isCollabMode()) {
+        alert("请先登录协作账号");
+        return;
+      }
+      const email = window.prompt("输入协作用户邮箱");
+      if (email == null) return;
+      const roleRaw = window.prompt("输入角色 viewer 或 editor", "editor");
+      if (roleRaw == null) return;
+      const role = String(roleRaw || "").trim().toLowerCase();
+      if (role !== "viewer" && role !== "editor") {
+        alert("角色仅支持 viewer 或 editor");
+        return;
+      }
+      try {
+        await collabFetch(`/api/collab/books/${currentBookId}/share`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: String(email || "").trim(), role })
+        });
+        alert("共享成功");
+      } catch (err) {
+        alert(err?.message || "共享失败");
+      }
     });
   }
 
@@ -3734,9 +4268,13 @@ function bindEvents() {
 }
 
 async function initApp() {
-  await loadState();
   bindDrawEvents();
   bindEvents();
+  await bootstrapAuthUser();
+  if (isCollabMode()) {
+    connectCollabSocket();
+  }
+  await loadState();
   el.mainImage.addEventListener("load", () => {
     syncDrawLayerSize();
     renderBoxes();

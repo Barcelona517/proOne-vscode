@@ -165,6 +165,7 @@ export class CollabPostgresStore {
     }
 
     const nextName = name == null ? member.name : String(name || "").trim() || member.name;
+    const nextPayload = payload && typeof payload === "object" ? payload : member.payload;
     const expectedVersion = Number(baseVersion);
     const useVersionCheck = Number.isFinite(expectedVersion) && expectedVersion > 0;
 
@@ -177,7 +178,7 @@ export class CollabPostgresStore {
        where id = $3
          and ($4::boolean = false or version = $5)
        returning id, name, owner_user_id, payload, version, created_at, updated_at`,
-      [nextName, JSON.stringify(payload || {}), bookId, useVersionCheck, useVersionCheck ? expectedVersion : 0]
+      [nextName, JSON.stringify(nextPayload || {}), bookId, useVersionCheck, useVersionCheck ? expectedVersion : 0]
     );
 
     if (result.rowCount === 0) {
@@ -185,6 +186,15 @@ export class CollabPostgresStore {
     }
 
     return { ...toBook(result.rows[0]), role: member.role };
+  }
+
+  async deleteBook({ bookId, actorUserId }) {
+    const actorBook = await this.getBookForUser(bookId, actorUserId);
+    if (!actorBook || actorBook.role !== "owner") {
+      throw new Error("仅书籍拥有者可删除");
+    }
+    const result = await this.pool.query("delete from collab_books where id = $1", [bookId]);
+    return result.rowCount > 0;
   }
 
   async shareBook({ bookId, actorUserId, targetEmail, role }) {

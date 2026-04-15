@@ -219,7 +219,7 @@ app.get("/api/collab/books/:id", requireCollab, requireAuth, async (req, res) =>
 
 app.put("/api/collab/books/:id", requireCollab, requireAuth, async (req, res) => {
   try {
-    const payload = req.body?.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+    const payload = req.body?.payload;
     const name = req.body?.name;
     const baseVersion = Number(req.body?.baseVersion);
     const book = await collabStore.updateBook({
@@ -237,6 +237,22 @@ app.put("/api/collab/books/:id", requireCollab, requireAuth, async (req, res) =>
       return;
     }
     res.status(400).json({ error: msg });
+  }
+});
+
+app.delete("/api/collab/books/:id", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const ok = await collabStore.deleteBook({
+      bookId: req.params.id,
+      actorUserId: req.user.id
+    });
+    if (!ok) {
+      res.status(404).json({ error: "书籍不存在" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "删除书籍失败" });
   }
 });
 
