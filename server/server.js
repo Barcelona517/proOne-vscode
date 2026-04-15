@@ -1,10 +1,15 @@
 import path from "path";
+import { createServer } from "http";
 import express from "express";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { WebSocketServer } from "ws";
 import { ArkRuntimeClient } from "@volcengine/ark-runtime";
 import { JsonStore } from "./storage/jsonStore.js";
 import { PostgresStore } from "./storage/postgresStore.js";
+import { CollabPostgresStore } from "./storage/collabPostgresStore.js";
 
 dotenv.config();
 
@@ -16,6 +21,8 @@ const port = Number.parseInt(process.env.PORT || "3000", 10);
 const storageMode = (process.env.STORAGE_MODE || "json").toLowerCase();
 const doubaoApiKey = process.env.DOUBAO_API_KEY || process.env.ARK_API_KEY || "";
 const doubaoModel = process.env.DOUBAO_MODEL || "doubao-seed-1-8-251228";
+const jwtSecret = String(process.env.JWT_SECRET || "").trim() || "dev-collab-secret-change-me";
+const jwtExpire = process.env.JWT_EXPIRE || "7d";
 
 const arkClient = doubaoApiKey
   ? new ArkRuntimeClient({ apiKey: doubaoApiKey })
@@ -25,11 +32,22 @@ const store = storageMode === "postgres"
   ? new PostgresStore(process.env.DATABASE_URL)
   : new JsonStore(path.resolve(__dirname, "data", "glyph-records.json"));
 
+const collabStore = storageMode === "postgres"
+  ? new CollabPostgresStore(process.env.DATABASE_URL)
+  : null;
+
 if (storageMode === "postgres" && !process.env.DATABASE_URL) {
   throw new Error("STORAGE_MODE=postgres 时必须设置 DATABASE_URL");
 }
 
+if (storageMode === "postgres" && !String(process.env.JWT_SECRET || "").trim()) {
+  console.warn("[WARN] JWT_SECRET 未设置，当前使用开发默认密钥，请尽快在生产环境配置 JWT_SECRET。");
+}
+
 await store.init();
+if (collabStore) {
+  await collabStore.init();
+}
 
 const app = express();
 app.use(express.json({ limit: "20mb" }));
@@ -37,7 +55,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") {
     res.status(204).end();
@@ -48,6 +66,198 @@ app.use((req, res, next) => {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, mode: storageMode, time: new Date().toISOString() });
+});
+
+function signToken(user) {
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      displayName: user.displayName || ""
+    },
+    jwtSecret,
+    { expiresIn: jwtExpire }
+  );
+}
+
+function parseBearerToken(value) {
+  const text = String(value || "");
+  if (!text.startsWith("Bearer ")) return "";
+  return text.slice("Bearer ".length).trim();
+}
+
+function requireCollab(req, res, next) {
+  if (!collabStore) {
+    res.status(501).json({ error: "协作模式仅支持 PostgreSQL 存储，请设置 STORAGE_MODE=postgres" });
+    return;
+  }
+  next();
+}
+
+function requireAuth(req, res, next) {
+  const token = parseBearerToken(req.headers.authorization);
+  if (!token) {
+    res.status(401).json({ error: "未登录" });
+    return;
+  }
+  try {
+    const payload = jwt.verify(token, jwtSecret);
+    req.user = {
+      id: String(payload.sub || ""),
+      email: String(payload.email || ""),
+      displayName: String(payload.displayName || "")
+    };
+    if (!req.user.id) {
+      res.status(401).json({ error: "登录状态无效" });
+      return;
+    }
+    next();
+  } catch (_) {
+    res.status(401).json({ error: "登录已过期，请重新登录" });
+  }
+}
+
+app.post("/api/auth/register", requireCollab, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    const displayName = String(req.body?.displayName || "").trim();
+    if (!email || !password) {
+      res.status(400).json({ error: "email 和 password 不能为空" });
+      return;
+    }
+    const existing = await collabStore.getUserByEmail(email);
+    if (existing) {
+      res.status(409).json({ error: "该邮箱已注册" });
+      return;
+    }
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await collabStore.createUser({ email, passwordHash, displayName });
+    const token = signToken(user);
+    res.status(201).json({ token, user });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "注册失败" });
+  }
+});
+
+app.post("/api/auth/login", requireCollab, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    if (!email || !password) {
+      res.status(400).json({ error: "email 和 password 不能为空" });
+      return;
+    }
+    const user = await collabStore.getUserByEmail(email);
+    if (!user) {
+      res.status(401).json({ error: "账号或密码错误" });
+      return;
+    }
+    const ok = await bcrypt.compare(password, user.passwordHash || "");
+    if (!ok) {
+      res.status(401).json({ error: "账号或密码错误" });
+      return;
+    }
+    const profile = {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      createdAt: user.createdAt
+    };
+    const token = signToken(profile);
+    res.json({ token, user: profile });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "登录失败" });
+  }
+});
+
+app.get("/api/auth/me", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const user = await collabStore.getUserById(req.user.id);
+    if (!user) {
+      res.status(404).json({ error: "用户不存在" });
+      return;
+    }
+    res.json({ user });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "查询失败" });
+  }
+});
+
+app.get("/api/collab/books", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const books = await collabStore.listBooksForUser(req.user.id);
+    res.json({ books });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "查询书籍失败" });
+  }
+});
+
+app.post("/api/collab/books", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim() || "未命名书籍";
+    const payload = req.body?.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+    const book = await collabStore.createBook({ userId: req.user.id, name, payload });
+    res.status(201).json({ book });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "创建书籍失败" });
+  }
+});
+
+app.get("/api/collab/books/:id", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const book = await collabStore.getBookForUser(req.params.id, req.user.id);
+    if (!book) {
+      res.status(404).json({ error: "书籍不存在或无权限" });
+      return;
+    }
+    res.json({ book });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "查询书籍失败" });
+  }
+});
+
+app.put("/api/collab/books/:id", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const payload = req.body?.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+    const name = req.body?.name;
+    const baseVersion = Number(req.body?.baseVersion);
+    const book = await collabStore.updateBook({
+      bookId: req.params.id,
+      userId: req.user.id,
+      name,
+      payload,
+      baseVersion
+    });
+    res.json({ book });
+  } catch (err) {
+    const msg = err?.message || "更新书籍失败";
+    if (msg.includes("版本冲突")) {
+      res.status(409).json({ error: msg });
+      return;
+    }
+    res.status(400).json({ error: msg });
+  }
+});
+
+app.post("/api/collab/books/:id/share", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const role = String(req.body?.role || "viewer").trim().toLowerCase();
+    if (!email) {
+      res.status(400).json({ error: "email 不能为空" });
+      return;
+    }
+    const result = await collabStore.shareBook({
+      bookId: req.params.id,
+      actorUserId: req.user.id,
+      targetEmail: email,
+      role
+    });
+    res.json({ shared: result });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "共享失败" });
+  }
 });
 
 app.get("/api/glyphs", async (_req, res) => {
@@ -481,7 +691,135 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-app.listen(port, () => {
+const httpServer = createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+const wsRooms = new Map();
+
+function addToRoom(bookId, ws) {
+  if (!wsRooms.has(bookId)) wsRooms.set(bookId, new Set());
+  wsRooms.get(bookId).add(ws);
+}
+
+function removeFromRooms(ws) {
+  wsRooms.forEach((members, bookId) => {
+    members.delete(ws);
+    if (members.size === 0) wsRooms.delete(bookId);
+  });
+}
+
+function wsSend(ws, payload) {
+  if (ws.readyState === 1) {
+    ws.send(JSON.stringify(payload));
+  }
+}
+
+function broadcastBook(bookId, payload, exceptWs = null) {
+  const members = wsRooms.get(bookId);
+  if (!members) return;
+  members.forEach((client) => {
+    if (exceptWs && client === exceptWs) return;
+    wsSend(client, payload);
+  });
+}
+
+function verifyTokenFromReq(req) {
+  const reqUrl = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+  const tokenFromQuery = String(reqUrl.searchParams.get("token") || "").trim();
+  const token = tokenFromQuery || parseBearerToken(req.headers.authorization);
+  if (!token) throw new Error("missing-token");
+  const payload = jwt.verify(token, jwtSecret);
+  return {
+    id: String(payload.sub || ""),
+    email: String(payload.email || "")
+  };
+}
+
+wss.on("connection", (ws, req, user) => {
+  ws.user = user;
+
+  ws.on("message", async (raw) => {
+    try {
+      if (!collabStore) {
+        wsSend(ws, { type: "error", message: "协作模式未启用" });
+        return;
+      }
+      const message = JSON.parse(String(raw || "{}"));
+      const type = String(message?.type || "").trim();
+      if (type === "subscribe") {
+        const bookId = String(message?.bookId || "").trim();
+        if (!bookId) {
+          wsSend(ws, { type: "error", message: "bookId 不能为空" });
+          return;
+        }
+        const canAccess = await collabStore.canAccessBook(bookId, ws.user.id);
+        if (!canAccess) {
+          wsSend(ws, { type: "error", message: "无权限订阅该书籍" });
+          return;
+        }
+        addToRoom(bookId, ws);
+        const book = await collabStore.getBookForUser(bookId, ws.user.id);
+        wsSend(ws, { type: "subscribed", bookId, book });
+        return;
+      }
+
+      if (type === "update_book") {
+        const bookId = String(message?.bookId || "").trim();
+        if (!bookId) {
+          wsSend(ws, { type: "error", message: "bookId 不能为空" });
+          return;
+        }
+        const updated = await collabStore.updateBook({
+          bookId,
+          userId: ws.user.id,
+          name: message?.name,
+          payload: message?.payload && typeof message.payload === "object" ? message.payload : {},
+          baseVersion: Number(message?.baseVersion)
+        });
+        const event = { type: "book_updated", bookId, book: updated };
+        wsSend(ws, event);
+        broadcastBook(bookId, event, ws);
+        return;
+      }
+
+      wsSend(ws, { type: "error", message: `未知消息类型: ${type || "(empty)"}` });
+    } catch (err) {
+      wsSend(ws, { type: "error", message: err?.message || "消息处理失败" });
+    }
+  });
+
+  ws.on("close", () => {
+    removeFromRooms(ws);
+  });
+});
+
+httpServer.on("upgrade", (req, socket, head) => {
+  try {
+    if (!collabStore) {
+      socket.destroy();
+      return;
+    }
+    const reqUrl = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+    if (reqUrl.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+    const user = verifyTokenFromReq(req);
+    if (!user.id) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req, user);
+    });
+  } catch (_) {
+    socket.destroy();
+  }
+});
+
+httpServer.listen(port, () => {
   console.log(`glyph api running at http://localhost:${port}`);
   console.log(`storage mode: ${storageMode}`);
+  if (collabStore) {
+    console.log(`collab websocket: ws://localhost:${port}/ws?token=...`);
+  }
 });
