@@ -27,13 +27,18 @@
 
   <div class="app-shell">
     <header class="topbar">
-      <button id="backToLibraryBtn" class="mini-btn" type="button">返回</button>
+      <div class="topbar-left-actions">
+        <button id="backToLibraryBtn" class="mini-btn" type="button">返回</button>
+        <button id="submitOrReviewBtn" class="mini-btn" type="button">提交改动</button>
+        <button id="endReviewBtn" class="mini-btn hidden" type="button">结束审核</button>
+        <button id="saveAllReviewBtn" class="mini-btn hidden" type="button">一键保存</button>
+        <button id="versionHistoryBtn" class="mini-btn hidden" type="button">版本查看</button>
+      </div>
       <h1>古籍 Online Editor</h1>
       <div class="topbar-actions">
-        <button id="shareBookBtn" class="mini-btn hidden" type="button">共享书籍</button>
         <input id="uploadInput" type="file" accept="image/*,.pdf,application/pdf" class="hidden" />
         <div class="ai-hint-topbar">
-          <button id="feedXmlHintsBtn" class="mini-btn" type="button">xml说明</button>
+          <button id="feedXmlHintsBtn" class="primary" type="button">xml说明</button>
           <input id="feedXmlHintsInput" type="file" accept=".xml,.txt,.md,.docx,.doc,text/plain,text/markdown,text/xml,application/xml,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden" multiple />
         </div>
         <button id="exportXmlBtn" class="primary" type="button">导出文件</button>
@@ -55,11 +60,14 @@
       <section class="center-panel">
         <div class="viewer-head">
           <div class="viewer-title-wrap">
-            <div id="viewerTitle">未选择图片</div>
+            <div class="viewer-title-row">
+              <div id="viewerTitle">未选择图片</div>
+              <button id="renameImageBtn" class="mini-btn" type="button">重命名</button>
+            </div>
             <input id="viewerTitleInput" class="hidden" type="text" placeholder="输入图片名称后按回车" />
           </div>
           <div id="collabLiveHint" class="muted collab-live-hint">协作在线：0 人</div>
-          <button id="renameImageBtn" class="mini-btn" type="button">重命名</button>
+          <button id="saveReviewPageBtn" class="mini-btn hidden" type="button">保存改动</button>
         </div>
         <div id="canvasWrap" class="canvas-wrap">
           <img id="mainImage" alt="主编辑图" draggable="false" />
@@ -322,6 +330,16 @@
 
       <div class="collab-members-footer">
         <button id="collabMembersCloseBtn" class="mini-btn" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="versionModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="versionModalTitle">
+    <div class="modal-card version-modal-card">
+      <div id="versionModalTitle" class="section-title">版本列表</div>
+      <div id="versionList" class="version-list"></div>
+      <div class="xml-hints-footer">
+        <button id="versionModalCloseBtn" class="mini-btn" type="button">关闭</button>
       </div>
     </div>
   </div>

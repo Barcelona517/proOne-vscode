@@ -104,6 +104,16 @@ const state = {
   draggingThumbId: null,
   batchDeleteImageIds: [],
   renamingImage: false,
+  reviewData: {
+    submissions: [],
+    editorBases: {}
+  },
+  reviewMode: {
+    active: false,
+    submissionId: "",
+    diffByImage: {},
+    savedPageIds: []
+  },
   collabPanel: {
     openBookId: "",
     loading: false,
@@ -118,6 +128,10 @@ const el = {
   newBookBtn: document.getElementById("newBookBtn"),
   libraryImportInput: document.getElementById("libraryImportInput"),
   backToLibraryBtn: document.getElementById("backToLibraryBtn"),
+  submitOrReviewBtn: document.getElementById("submitOrReviewBtn"),
+  endReviewBtn: document.getElementById("endReviewBtn"),
+  saveAllReviewBtn: document.getElementById("saveAllReviewBtn"),
+  versionHistoryBtn: document.getElementById("versionHistoryBtn"),
   authUserLabel: document.getElementById("authUserLabel"),
   authOpenBtn: document.getElementById("authOpenBtn"),
   authLogoutBtn: document.getElementById("authLogoutBtn"),
@@ -146,6 +160,7 @@ const el = {
   viewerTitle: document.getElementById("viewerTitle"),
   viewerTitleInput: document.getElementById("viewerTitleInput"),
   collabLiveHint: document.getElementById("collabLiveHint"),
+  saveReviewPageBtn: document.getElementById("saveReviewPageBtn"),
   renameImageBtn: document.getElementById("renameImageBtn"),
   mainPanelBtnEdit: document.getElementById("mainPanelBtnEdit"),
   mainPanelBtnGlyph: document.getElementById("mainPanelBtnGlyph"),
@@ -205,6 +220,9 @@ const el = {
   xmlHintsList: document.getElementById("xmlHintsList"),
   xmlHintsCloseBtn: document.getElementById("xmlHintsCloseBtn"),
   xmlHintsAddBtn: document.getElementById("xmlHintsAddBtn"),
+  versionModal: document.getElementById("versionModal"),
+  versionList: document.getElementById("versionList"),
+  versionModalCloseBtn: document.getElementById("versionModalCloseBtn"),
   annoTranscriptionRow: document.getElementById("annoTranscriptionRow"),
   annoTranscription: document.getElementById("annoTranscription"),
   annoMeaningRow: document.getElementById("annoMeaningRow"),
@@ -304,6 +322,7 @@ function getCurrentBookRole() {
 }
 
 function canEditCurrentBook() {
+  if (state.reviewMode?.active) return false;
   const role = getCurrentBookRole();
   return role === "owner" || role === "editor";
 }
@@ -318,6 +337,10 @@ function canInviteMembers(role) {
 }
 
 function ensureCanEdit(actionName = "执行编辑操作") {
+  if (state.reviewMode?.active) {
+    alert("当前处于审核模式，请先结束审核");
+    return false;
+  }
   if (canEditCurrentBook()) return true;
   alert(`你当前是仅读角色，不能${actionName}`);
   return false;
@@ -425,6 +448,353 @@ function sendPresenceCursor(x, y) {
   }));
 }
 
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeReviewData(data) {
+  const base = data && typeof data === "object" ? data : {};
+  const submissions = Array.isArray(base.submissions) ? base.submissions.map((item) => ({
+    id: String(item?.id || uid("review_ver")),
+    createdAt: String(item?.createdAt || new Date().toISOString()),
+    submitter: {
+      userId: String(item?.submitter?.userId || ""),
+      displayName: String(item?.submitter?.displayName || ""),
+      email: String(item?.submitter?.email || ""),
+      accountNo: Number(item?.submitter?.accountNo || 0)
+    },
+    status: String(item?.status || "pending"),
+    savedPageIds: Array.isArray(item?.savedPageIds) ? item.savedPageIds.map((x) => String(x || "")).filter(Boolean) : [],
+    reviewedAt: item?.reviewedAt ? String(item.reviewedAt) : "",
+    baseSnapshot: Array.isArray(item?.baseSnapshot) ? item.baseSnapshot : [],
+    targetSnapshot: Array.isArray(item?.targetSnapshot) ? item.targetSnapshot : []
+  })) : [];
+  const editorBases = base.editorBases && typeof base.editorBases === "object" ? base.editorBases : {};
+  const lastApprovedSnapshot = Array.isArray(base.lastApprovedSnapshot) ? base.lastApprovedSnapshot : [];
+  return { submissions, editorBases, lastApprovedSnapshot };
+}
+
+function captureReviewSnapshot(images = state.images) {
+  return (Array.isArray(images) ? images : []).map((img) => ({
+    id: img.id,
+    name: img.name || "",
+    annotations: deepClone(Array.isArray(img.annotations) ? img.annotations : [])
+  }));
+}
+
+function snapshotMap(snapshot) {
+  const map = new Map();
+  (Array.isArray(snapshot) ? snapshot : []).forEach((item) => {
+    map.set(String(item?.id || ""), item || {});
+  });
+  return map;
+}
+
+function buildReviewDiffByImage(baseSnapshot, targetSnapshot, savedPageIds = []) {
+  const baseMap = snapshotMap(baseSnapshot);
+  const targetMap = snapshotMap(targetSnapshot);
+  const saved = new Set((savedPageIds || []).map((x) => String(x || "")));
+  const imageIds = new Set([...baseMap.keys(), ...targetMap.keys()]);
+  const diffByImage = {};
+
+  imageIds.forEach((imageId) => {
+    if (!imageId || saved.has(imageId)) return;
+    const base = baseMap.get(imageId) || { annotations: [] };
+    const target = targetMap.get(imageId) || { annotations: [] };
+    const baseAnnos = Array.isArray(base.annotations) ? base.annotations : [];
+    const targetAnnos = Array.isArray(target.annotations) ? target.annotations : [];
+
+    const baseById = new Map(baseAnnos.map((anno) => [String(anno?.id || uid("b")), anno]));
+    const targetById = new Map(targetAnnos.map((anno) => [String(anno?.id || uid("t")), anno]));
+    const annoIds = new Set([...baseById.keys(), ...targetById.keys()]);
+    const added = [];
+    const removed = [];
+
+    annoIds.forEach((annoId) => {
+      const oldAnno = baseById.get(annoId);
+      const newAnno = targetById.get(annoId);
+      if (!oldAnno && newAnno) {
+        added.push(newAnno);
+        return;
+      }
+      if (oldAnno && !newAnno) {
+        removed.push(oldAnno);
+        return;
+      }
+      if (oldAnno && newAnno) {
+        const oldKey = JSON.stringify(oldAnno);
+        const newKey = JSON.stringify(newAnno);
+        if (oldKey !== newKey) {
+          removed.push(oldAnno);
+          added.push(newAnno);
+        }
+      }
+    });
+
+    if (added.length > 0 || removed.length > 0) {
+      diffByImage[imageId] = {
+        added,
+        removed,
+        baseImage: base,
+        targetImage: target
+      };
+    }
+  });
+
+  return diffByImage;
+}
+
+function activeReviewSubmission() {
+  if (!state.reviewMode.active || !state.reviewMode.submissionId) return null;
+  return state.reviewData.submissions.find((item) => item.id === state.reviewMode.submissionId) || null;
+}
+
+function hasCurrentImageReviewDiff() {
+  if (!state.reviewMode.active) return false;
+  const imageId = String(state.selectedImageId || "");
+  if (!imageId) return false;
+  return !!state.reviewMode.diffByImage[imageId];
+}
+
+function rebuildReviewDiffFromActiveSubmission() {
+  const submission = activeReviewSubmission();
+  if (!submission) {
+    state.reviewMode.diffByImage = {};
+    state.reviewMode.savedPageIds = [];
+    return;
+  }
+  state.reviewMode.savedPageIds = Array.isArray(submission.savedPageIds) ? submission.savedPageIds.slice() : [];
+  state.reviewMode.diffByImage = buildReviewDiffByImage(
+    submission.baseSnapshot,
+    submission.targetSnapshot,
+    state.reviewMode.savedPageIds
+  );
+}
+
+function enterReviewMode(submissionId) {
+  const role = getCurrentBookRole();
+  if (role !== "owner") {
+    alert("仅管理者可审核改动");
+    return;
+  }
+  const submission = state.reviewData.submissions.find((item) => item.id === submissionId);
+  if (!submission) {
+    alert("未找到对应版本");
+    return;
+  }
+  state.reviewMode.active = true;
+  state.reviewMode.submissionId = submission.id;
+  rebuildReviewDiffFromActiveSubmission();
+  const firstImageId = Object.keys(state.reviewMode.diffByImage)[0] || "";
+  if (firstImageId) {
+    state.selectedImageId = firstImageId;
+  }
+  submission.status = "reviewing";
+  renderAll();
+}
+
+function exitReviewMode() {
+  state.reviewMode.active = false;
+  state.reviewMode.submissionId = "";
+  state.reviewMode.diffByImage = {};
+  state.reviewMode.savedPageIds = [];
+  renderAll();
+}
+
+function submitCurrentChangesForReview() {
+  const role = getCurrentBookRole();
+  if (role !== "editor") {
+    alert("仅编辑者可提交改动");
+    return;
+  }
+  const userId = String(collabState.user?.id || "");
+  const currentSnapshot = captureReviewSnapshot(state.images);
+  const editorBase = state.reviewData.editorBases?.[userId];
+  const fallbackBase = state.reviewData.lastApprovedSnapshot;
+  const baseSnapshot = Array.isArray(editorBase) && editorBase.length > 0
+    ? editorBase
+    : (Array.isArray(fallbackBase) && fallbackBase.length > 0 ? fallbackBase : currentSnapshot);
+
+  const diffByImage = buildReviewDiffByImage(baseSnapshot, currentSnapshot, []);
+  if (Object.keys(diffByImage).length === 0) {
+    alert("当前没有可提交的改动");
+    return;
+  }
+
+  const version = {
+    id: uid("review_ver"),
+    createdAt: new Date().toISOString(),
+    submitter: {
+      userId,
+      displayName: String(collabState.user?.displayName || ""),
+      email: String(collabState.user?.email || ""),
+      accountNo: Number(collabState.user?.accountNo || 0)
+    },
+    status: "pending",
+    savedPageIds: [],
+    reviewedAt: "",
+    baseSnapshot: deepClone(baseSnapshot),
+    targetSnapshot: deepClone(currentSnapshot)
+  };
+
+  state.reviewData.submissions.push(version);
+  state.reviewData.editorBases[userId] = deepClone(currentSnapshot);
+  saveState({ wait: true, force: true });
+  alert("改动已提交给管理者审核");
+  renderAll();
+}
+
+function applyTargetSnapshotToImage(imageId, targetSnapshot) {
+  const target = snapshotMap(targetSnapshot).get(String(imageId || ""));
+  const image = state.images.find((img) => img.id === imageId);
+  if (!image) return;
+  const nextAnnos = Array.isArray(target?.annotations) ? deepClone(target.annotations) : [];
+  image.annotations = nextAnnos;
+}
+
+function saveCurrentReviewPage() {
+  if (!state.reviewMode.active) return;
+  const submission = activeReviewSubmission();
+  if (!submission) return;
+  const imageId = String(state.selectedImageId || "");
+  if (!imageId || !state.reviewMode.diffByImage[imageId]) {
+    alert("当前页没有待保存改动");
+    return;
+  }
+  applyTargetSnapshotToImage(imageId, submission.targetSnapshot);
+  if (!submission.savedPageIds.includes(imageId)) {
+    submission.savedPageIds.push(imageId);
+  }
+  rebuildReviewDiffFromActiveSubmission();
+  saveState({ force: true });
+  renderAll();
+}
+
+function saveAllReviewPages() {
+  if (!state.reviewMode.active) return;
+  const submission = activeReviewSubmission();
+  if (!submission) return;
+  const pendingImageIds = Object.keys(state.reviewMode.diffByImage);
+  pendingImageIds.forEach((imageId) => {
+    applyTargetSnapshotToImage(imageId, submission.targetSnapshot);
+    if (!submission.savedPageIds.includes(imageId)) {
+      submission.savedPageIds.push(imageId);
+    }
+  });
+  submission.status = "approved";
+  submission.reviewedAt = new Date().toISOString();
+  state.reviewData.lastApprovedSnapshot = deepClone(submission.targetSnapshot);
+  rebuildReviewDiffFromActiveSubmission();
+  saveState({ force: true });
+  renderAll();
+}
+
+function finishReviewMode() {
+  if (!state.reviewMode.active) return;
+  const submission = activeReviewSubmission();
+  if (!submission) {
+    exitReviewMode();
+    return;
+  }
+
+  const pendingCount = Object.keys(state.reviewMode.diffByImage).length;
+  if (pendingCount === 0) {
+    submission.status = "approved";
+    submission.reviewedAt = new Date().toISOString();
+    state.reviewData.lastApprovedSnapshot = deepClone(submission.targetSnapshot);
+  } else {
+    submission.status = "pending";
+  }
+  saveState({ force: true });
+  exitReviewMode();
+}
+
+function pendingReviewSubmission() {
+  const list = state.reviewData.submissions.filter((item) => item.status === "pending" || item.status === "reviewing");
+  return list[list.length - 1] || null;
+}
+
+function openVersionModal() {
+  if (!el.versionModal || !el.versionList) return;
+  el.versionList.innerHTML = "";
+  const items = state.reviewData.submissions.slice().reverse();
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "xml-hints-empty";
+    empty.textContent = "暂无提交版本";
+    el.versionList.appendChild(empty);
+  }
+  items.forEach((item, index) => {
+    const card = document.createElement("div");
+    card.className = "version-item";
+    const head = document.createElement("div");
+    head.className = "version-item-head";
+    const title = document.createElement("strong");
+    title.textContent = `版本 ${items.length - index}`;
+    const status = document.createElement("span");
+    status.className = "version-item-status";
+    status.textContent = item.status === "approved" ? "已通过" : item.status === "reviewing" ? "审核中" : "待审核";
+    head.appendChild(title);
+    head.appendChild(status);
+
+    const info = document.createElement("div");
+    info.className = "muted";
+    const who = item.submitter?.displayName || item.submitter?.email || "未知用户";
+    info.textContent = `${who} 提交于 ${new Date(item.createdAt).toLocaleString()}`;
+
+    const actions = document.createElement("div");
+    actions.className = "version-item-actions";
+    const openBtn = document.createElement("button");
+    openBtn.className = "mini-btn";
+    openBtn.type = "button";
+    openBtn.textContent = "查看此版";
+    openBtn.addEventListener("click", () => {
+      enterReviewMode(item.id);
+      closeVersionModal();
+    });
+    actions.appendChild(openBtn);
+
+    card.appendChild(head);
+    card.appendChild(info);
+    card.appendChild(actions);
+    el.versionList.appendChild(card);
+  });
+  el.versionModal.classList.remove("hidden");
+}
+
+function closeVersionModal() {
+  if (!el.versionModal) return;
+  el.versionModal.classList.add("hidden");
+}
+
+function syncReviewToolbarUi() {
+  const role = getCurrentBookRole();
+  const isOwner = role === "owner";
+  const isEditor = role === "editor";
+  const inReview = !!state.reviewMode.active;
+
+  if (el.submitOrReviewBtn) {
+    if (isOwner) {
+      el.submitOrReviewBtn.classList.toggle("hidden", inReview);
+      el.submitOrReviewBtn.textContent = "查看改动";
+    } else if (isEditor) {
+      el.submitOrReviewBtn.classList.remove("hidden");
+      el.submitOrReviewBtn.textContent = "提交改动";
+    } else {
+      el.submitOrReviewBtn.classList.add("hidden");
+    }
+  }
+
+  if (el.endReviewBtn) el.endReviewBtn.classList.toggle("hidden", !(isOwner && inReview));
+  if (el.saveAllReviewBtn) el.saveAllReviewBtn.classList.toggle("hidden", !(isOwner && inReview));
+  if (el.versionHistoryBtn) el.versionHistoryBtn.classList.toggle("hidden", !isOwner || inReview);
+  if (el.saveReviewPageBtn) {
+    const show = isOwner && inReview && hasCurrentImageReviewDiff();
+    el.saveReviewPageBtn.classList.toggle("hidden", !show);
+  }
+  if (el.renameImageBtn) el.renameImageBtn.classList.toggle("hidden", inReview);
+}
+
 function updateAuthUi() {
   const currentRole = getCurrentBookRole();
   if (el.authUserLabel) {
@@ -440,6 +810,7 @@ function updateAuthUi() {
   if (el.shareBookBtn) {
     el.shareBookBtn.classList.toggle("hidden", !collabState.user || !currentBookId || !canInviteMembers(currentRole));
   }
+  syncReviewToolbarUi();
   syncEditorPermissionUi();
 }
 
@@ -2875,7 +3246,8 @@ function collectCurrentBookData() {
     activeMainPanel: state.activeMainPanel,
     activeRightPanel: state.activeRightPanel,
     glyphRegistry: state.glyphRegistry,
-    aiLayoutHints: normalizeAiLayoutHints(state.aiLayoutHints)
+    aiLayoutHints: normalizeAiLayoutHints(state.aiLayoutHints),
+    reviewData: normalizeReviewData(state.reviewData)
   };
 }
 
@@ -2890,6 +3262,13 @@ function applyBookData(parsed) {
     ? parsed.glyphRegistry.map((item) => normalizeGlyphRegistryItem(item))
     : [];
   state.aiLayoutHints = normalizeAiLayoutHints(parsed.aiLayoutHints || {});
+  state.reviewData = normalizeReviewData(parsed.reviewData || {});
+  state.reviewMode = {
+    active: false,
+    submissionId: "",
+    diffByImage: {},
+    savedPageIds: []
+  };
   state.glyphDraft = null;
   state.glyphCreateActive = false;
   state.pendingDrafts = [];
@@ -2908,7 +3287,8 @@ function createDefaultBookData() {
     activeMainPanel: "edit",
     activeRightPanel: "object",
     glyphRegistry: [],
-    aiLayoutHints: { examples: [], activeFileNames: [], cachedPromptLines: [], updatedAt: "" }
+    aiLayoutHints: { examples: [], activeFileNames: [], cachedPromptLines: [], updatedAt: "" },
+    reviewData: { submissions: [], editorBases: {}, lastApprovedSnapshot: [] }
   };
 }
 
@@ -2969,7 +3349,8 @@ async function migrateLocalStorageBooksIfNeeded() {
 function saveState(options = {}) {
   if (!currentBookId) return Promise.resolve();
   if (!collabState.token) return Promise.resolve();
-  if (!canEditCurrentBook()) return Promise.resolve();
+  const force = !!options.force;
+  if (!force && !canEditCurrentBook()) return Promise.resolve();
   const wait = !!options.wait;
   const payload = collectCurrentBookData();
   const nextTask = async () => {
@@ -3479,6 +3860,7 @@ async function loadState() {
 function renderThumbs() {
   el.thumbList.innerHTML = "";
   const editable = canEditCurrentBook();
+  const isOwnerReview = getCurrentBookRole() === "owner" && state.reviewMode.active;
   const selectedForDelete = new Set(state.batchDeleteImageIds);
   state.images.forEach((img) => {
     const card = document.createElement("div");
@@ -3493,6 +3875,22 @@ function renderThumbs() {
       <div class="thumb-meta">${img.name}</div>
       <div class="thumb-meta">id:${img.meta.id}</div>
     `;
+
+    if (isOwnerReview) {
+      const head = card.querySelector(".thumb-head");
+      const hasDiff = !!state.reviewMode.diffByImage[String(img.id || "")];
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "mini-btn thumb-review-save-btn";
+      saveBtn.textContent = "保存改动";
+      saveBtn.disabled = !hasDiff;
+      saveBtn.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        state.selectedImageId = img.id;
+        saveCurrentReviewPage();
+      });
+      head.appendChild(saveBtn);
+    }
 
     card.addEventListener("dragstart", (evt) => {
       if (!editable) return;
@@ -3547,7 +3945,7 @@ function renderThumbs() {
     });
 
     const selectCheckbox = card.querySelector(`input[data-select-id="${img.id}"]`);
-    selectCheckbox.disabled = !editable;
+    selectCheckbox.disabled = !editable || isOwnerReview;
     selectCheckbox.addEventListener("click", (evt) => {
       evt.stopPropagation();
     });
@@ -3650,14 +4048,28 @@ function renderBoxes() {
   el.drawLayer.innerHTML = "";
   if (!img) return;
   const editable = canEditCurrentBook();
+  const isReviewMode = !!state.reviewMode.active;
+  const reviewDiff = isReviewMode ? state.reviewMode.diffByImage[String(img.id || "")] : null;
   const parentMap = getParentMap(img);
 
-  img.annotations.forEach((anno) => {
+  const renderAnnos = [];
+  if (isReviewMode) {
+    (reviewDiff?.added || []).forEach((anno) => {
+      renderAnnos.push({ ...anno, __reviewKind: "added" });
+    });
+    (reviewDiff?.removed || []).forEach((anno) => {
+      renderAnnos.push({ ...anno, __reviewKind: "removed" });
+    });
+  } else {
+    img.annotations.forEach((anno) => renderAnnos.push(anno));
+  }
+
+  renderAnnos.forEach((anno) => {
     const box = document.createElement("div");
     box.className = "box shape-rect";
-    if (anno.id === state.selectedAnnoId) box.classList.add("selected");
+    if (!isReviewMode && anno.id === state.selectedAnnoId) box.classList.add("selected");
     box.style.zIndex = String(50 + templateDepth(anno.tagId));
-    if (state.selectedTagFilterName) {
+    if (!isReviewMode && state.selectedTagFilterName) {
       if (anno.tagName === state.selectedTagFilterName) box.classList.add("matching-tag");
       else box.classList.add("dimmed");
     }
@@ -3665,19 +4077,32 @@ function renderBoxes() {
     box.style.top = `${anno.rect.y * 100}%`;
     box.style.width = `${anno.rect.w * 100}%`;
     box.style.height = `${anno.rect.h * 100}%`;
-    box.style.setProperty("--shape-color", anno.color);
-    applyBoxVisualStyle(box, anno.color, anno.borderStyle, anno.borderWidth);
-    box.title = `${anno.tagPath}${parentMap.get(anno.id) ? " (子框)" : ""}`;
-    box.addEventListener("click", (evt) => {
-      evt.stopPropagation();
-      const layerRect = el.drawLayer.getBoundingClientRect();
-      const x = clamp01((evt.clientX - layerRect.left) / layerRect.width);
-      const y = clamp01((evt.clientY - layerRect.top) / layerRect.height);
-      const picked = pickTopAnnoAtPoint(img, x, y);
-      if (picked) state.selectedAnnoId = picked.id;
-      renderAll();
-    });
-    if (editable && anno.id === state.selectedAnnoId) {
+    if (isReviewMode) {
+      if (anno.__reviewKind === "added") {
+        box.style.setProperty("--shape-color", "#2a8f54");
+        applyBoxVisualStyle(box, "#2a8f54", "solid", 2);
+        box.title = `新增: ${anno.tagPath || anno.tagName || "标注"}`;
+      } else {
+        box.style.setProperty("--shape-color", "#c23a2c");
+        applyBoxVisualStyle(box, "#c23a2c", "dashed", 2);
+        box.style.background = "rgba(194, 58, 44, 0.12)";
+        box.title = `减少: ${anno.tagPath || anno.tagName || "标注"}`;
+      }
+    } else {
+      box.style.setProperty("--shape-color", anno.color);
+      applyBoxVisualStyle(box, anno.color, anno.borderStyle, anno.borderWidth);
+      box.title = `${anno.tagPath}${parentMap.get(anno.id) ? " (子框)" : ""}`;
+      box.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        const layerRect = el.drawLayer.getBoundingClientRect();
+        const x = clamp01((evt.clientX - layerRect.left) / layerRect.width);
+        const y = clamp01((evt.clientY - layerRect.top) / layerRect.height);
+        const picked = pickTopAnnoAtPoint(img, x, y);
+        if (picked) state.selectedAnnoId = picked.id;
+        renderAll();
+      });
+    }
+    if (!isReviewMode && editable && anno.id === state.selectedAnnoId) {
       ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
         const handle = document.createElement("span");
         handle.className = `box-resize-handle handle-${dir}`;
@@ -3704,7 +4129,7 @@ function renderBoxes() {
     el.drawLayer.appendChild(box);
   });
 
-  if (state.draftRect) {
+  if (!isReviewMode && state.draftRect) {
     const draftShape = "rect";
     const draftColor = state.glyphCreateActive ? "#8f3b2e" : el.annoColor.value;
     const draftBorderStyle = state.glyphCreateActive ? "solid" : normalizeAnnoBorderStyle(el.annoShapeSelect.value);
@@ -3719,7 +4144,7 @@ function renderBoxes() {
     el.drawLayer.appendChild(draft);
   }
 
-  state.pendingDrafts.forEach((draftItem) => {
+  if (!isReviewMode) state.pendingDrafts.forEach((draftItem) => {
     const draft = document.createElement("div");
     draft.className = "box temp shape-rect";
     draft.style.left = `${draftItem.rect.x * 100}%`;
@@ -3875,6 +4300,12 @@ function renderPropsEditor() {
 }
 
 function renderEditMode() {
+  if (state.reviewMode.active) {
+    el.drawState.textContent = "审核模式：仅显示本次新增/减少改动，普通编辑已禁用";
+    el.startDrawBtn.textContent = "开始添加";
+    setDrawTextFieldsVisible(false);
+    return;
+  }
   if (!canEditCurrentBook()) {
     el.drawState.textContent = "当前为仅读权限，可查看方框与标签，不能编辑";
     el.startDrawBtn.textContent = "开始添加";
@@ -4167,6 +4598,7 @@ function renderAll() {
   renderGlyphPanel();
   renderPresenceLayer();
   renderLivePresenceHint();
+  syncReviewToolbarUi();
   syncEditorPermissionUi();
 }
 
@@ -4555,10 +4987,65 @@ function bindEvents() {
   if (el.backToLibraryBtn) {
     el.backToLibraryBtn.addEventListener("click", async () => {
       await saveState({ wait: true });
+      exitReviewMode();
       await setLastView("library");
       renderBooksList();
       showLibraryView();
       updateAuthUi();
+    });
+  }
+
+  if (el.submitOrReviewBtn) {
+    el.submitOrReviewBtn.addEventListener("click", () => {
+      const role = getCurrentBookRole();
+      if (role === "editor") {
+        submitCurrentChangesForReview();
+        return;
+      }
+      if (role === "owner") {
+        const pending = pendingReviewSubmission();
+        if (!pending) {
+          alert("暂无待审核版本");
+          return;
+        }
+        enterReviewMode(pending.id);
+      }
+    });
+  }
+
+  if (el.endReviewBtn) {
+    el.endReviewBtn.addEventListener("click", () => {
+      finishReviewMode();
+    });
+  }
+
+  if (el.saveAllReviewBtn) {
+    el.saveAllReviewBtn.addEventListener("click", () => {
+      saveAllReviewPages();
+    });
+  }
+
+  if (el.saveReviewPageBtn) {
+    el.saveReviewPageBtn.addEventListener("click", () => {
+      saveCurrentReviewPage();
+    });
+  }
+
+  if (el.versionHistoryBtn) {
+    el.versionHistoryBtn.addEventListener("click", () => {
+      openVersionModal();
+    });
+  }
+
+  if (el.versionModalCloseBtn) {
+    el.versionModalCloseBtn.addEventListener("click", () => {
+      closeVersionModal();
+    });
+  }
+
+  if (el.versionModal) {
+    el.versionModal.addEventListener("click", (evt) => {
+      if (evt.target === el.versionModal) closeVersionModal();
     });
   }
 
@@ -4776,6 +5263,7 @@ function bindEvents() {
       closeExportFormatModal();
       closeXmlHintsModal();
       closeCollabMembersModal();
+      closeVersionModal();
     }
   });
 

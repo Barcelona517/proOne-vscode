@@ -181,6 +181,12 @@ body {
   background: linear-gradient(90deg, #fff7e5, #f7e4d2);
 }
 
+.topbar-left-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .topbar h1 {
   font-size: 17px;
   margin: 0;
@@ -198,6 +204,11 @@ body {
   align-items: center;
   gap: 0;
   flex: 0 0 auto;
+}
+
+.ai-hint-topbar #feedXmlHintsBtn {
+  margin: 0;
+  min-width: 96px;
 }
 
 .ai-hint-topbar #feedXmlHintsBtn {
@@ -370,6 +381,18 @@ body {
 .viewer-title-wrap {
   flex: 1;
   min-width: 0;
+}
+
+.viewer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewer-title-row #renameImageBtn {
+  width: auto;
+  margin: 0;
+  flex: 0 0 auto;
 }
 
 .collab-live-hint {
@@ -887,6 +910,56 @@ hr {
 
 .collab-members-modal-card {
   width: min(840px, calc(100vw - 24px));
+}
+
+.version-modal-card {
+  width: min(640px, calc(100vw - 24px));
+}
+
+.version-list {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf2;
+  max-height: 340px;
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.version-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.version-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-item-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.version-item-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.thumb-review-save-btn {
+  width: auto;
+  margin: 0;
+  padding: 2px 8px;
+  font-size: 12px;
 }
 
 .collab-role-grid {
