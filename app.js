@@ -544,6 +544,34 @@ function buildReviewDiffByImage(baseSnapshot, targetSnapshot, savedPageIds = [])
   return diffByImage;
 }
 
+function getEditorBaselineSnapshot(userId, currentSnapshot) {
+  const uidText = String(userId || "");
+  if (!uidText) return deepClone(Array.isArray(currentSnapshot) ? currentSnapshot : []);
+
+  const existing = state.reviewData.editorBases?.[uidText];
+  if (Array.isArray(existing) && existing.length > 0) {
+    return deepClone(existing);
+  }
+
+  const approved = state.reviewData.lastApprovedSnapshot;
+  const base = Array.isArray(approved) && approved.length > 0
+    ? deepClone(approved)
+    : deepClone(Array.isArray(currentSnapshot) ? currentSnapshot : []);
+  state.reviewData.editorBases[uidText] = deepClone(base);
+  return base;
+}
+
+function hasUnsubmittedEditorChanges() {
+  if (getCurrentBookRole() !== "editor") return false;
+  if (!currentBookId || state.reviewMode.active) return false;
+  const userId = String(collabState.user?.id || "");
+  if (!userId) return false;
+  const currentSnapshot = captureReviewSnapshot(state.images);
+  const baseSnapshot = getEditorBaselineSnapshot(userId, currentSnapshot);
+  const diff = buildReviewDiffByImage(baseSnapshot, currentSnapshot, []);
+  return Object.keys(diff).length > 0;
+}
+
 function activeReviewSubmission() {
   if (!state.reviewMode.active || !state.reviewMode.submissionId) return null;
   return state.reviewData.submissions.find((item) => item.id === state.reviewMode.submissionId) || null;
@@ -609,11 +637,7 @@ function submitCurrentChangesForReview() {
   }
   const userId = String(collabState.user?.id || "");
   const currentSnapshot = captureReviewSnapshot(state.images);
-  const editorBase = state.reviewData.editorBases?.[userId];
-  const fallbackBase = state.reviewData.lastApprovedSnapshot;
-  const baseSnapshot = Array.isArray(editorBase) && editorBase.length > 0
-    ? editorBase
-    : (Array.isArray(fallbackBase) && fallbackBase.length > 0 ? fallbackBase : currentSnapshot);
+  const baseSnapshot = getEditorBaselineSnapshot(userId, currentSnapshot);
 
   const diffByImage = buildReviewDiffByImage(baseSnapshot, currentSnapshot, []);
   if (Object.keys(diffByImage).length === 0) {
@@ -3263,6 +3287,13 @@ function applyBookData(parsed) {
     : [];
   state.aiLayoutHints = normalizeAiLayoutHints(parsed.aiLayoutHints || {});
   state.reviewData = normalizeReviewData(parsed.reviewData || {});
+  if (getCurrentBookRole() === "editor") {
+    const uidText = String(collabState.user?.id || "");
+    if (uidText) {
+      const currentSnapshot = captureReviewSnapshot(state.images);
+      getEditorBaselineSnapshot(uidText, currentSnapshot);
+    }
+  }
   state.reviewMode = {
     active: false,
     submissionId: "",
@@ -3423,6 +3454,13 @@ async function openBookById(bookId) {
 
   applyBookData(parsed);
   currentBookId = bookId;
+  if (getCurrentBookRole() === "editor") {
+    const uidText = String(collabState.user?.id || "");
+    if (uidText) {
+      const currentSnapshot = captureReviewSnapshot(state.images);
+      getEditorBaselineSnapshot(uidText, currentSnapshot);
+    }
+  }
   await setLastOpenedBookId(bookId);
   await setLastView("editor");
   showEditorView();
@@ -4986,6 +5024,10 @@ function bindEvents() {
 
   if (el.backToLibraryBtn) {
     el.backToLibraryBtn.addEventListener("click", async () => {
+      if (hasUnsubmittedEditorChanges()) {
+        alert("请先提交改动");
+        return;
+      }
       await saveState({ wait: true });
       exitReviewMode();
       await setLastView("library");
