@@ -37,6 +37,7 @@ body {
   display: grid;
   grid-template-rows: 52px 1fr;
 }
+  flex-wrap: nowrap;
 
 .library-topbar {
   display: flex;
@@ -45,13 +46,21 @@ body {
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(90deg, #fff7e5, #f7e4d2);
+  white-space: nowrap;
 }
 
 .library-topbar h1 {
   font-size: 17px;
   margin: 0;
 }
+  flex: 0 0 auto;
+  white-space: nowrap;
 
+
+.library-topbar .topbar-actions {
+  margin-left: auto;
+  flex-wrap: nowrap;
+}
 .library-title-actions {
   display: flex;
   align-items: center;
