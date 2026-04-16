@@ -58,11 +58,14 @@
             <div id="viewerTitle">未选择图片</div>
             <input id="viewerTitleInput" class="hidden" type="text" placeholder="输入图片名称后按回车" />
           </div>
+          <div id="collabLiveHint" class="muted collab-live-hint">协作在线：0 人</div>
           <button id="renameImageBtn" class="mini-btn" type="button">重命名</button>
         </div>
         <div id="canvasWrap" class="canvas-wrap">
           <img id="mainImage" alt="主编辑图" draggable="false" />
           <div id="drawLayer" class="draw-layer"></div>
+          <div id="presenceLayer" class="presence-layer"></div>
+          <div id="collabActivityFeed" class="collab-activity-feed"></div>
         </div>
       </section>
 
@@ -284,6 +287,43 @@
         <button id="authRegisterSubmitBtn" type="button">注册</button>
       </div>
       <button id="authCancelBtn" class="mini-btn" type="button">取消</button>
+    </div>
+  </div>
+
+  <div id="collabMembersModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collabMembersTitle">
+    <div class="modal-card collab-members-modal-card">
+      <div id="collabMembersTitle" class="section-title">协作成员</div>
+      <div id="collabMembersHint" class="muted"></div>
+
+      <div class="collab-role-grid">
+        <section class="collab-role-col" data-role="owner">
+          <div class="collab-role-head">
+            <span>管理者</span>
+            <button id="collabAddOwnerBtn" class="mini-btn" type="button">+</button>
+          </div>
+          <div id="collabRoleOwnerList" class="collab-role-list"></div>
+        </section>
+
+        <section class="collab-role-col" data-role="editor">
+          <div class="collab-role-head">
+            <span>可编辑者</span>
+            <button id="collabAddEditorBtn" class="mini-btn" type="button">+</button>
+          </div>
+          <div id="collabRoleEditorList" class="collab-role-list"></div>
+        </section>
+
+        <section class="collab-role-col" data-role="viewer">
+          <div class="collab-role-head">
+            <span>仅读</span>
+            <button id="collabAddViewerBtn" class="mini-btn" type="button">+</button>
+          </div>
+          <div id="collabRoleViewerList" class="collab-role-list"></div>
+        </section>
+      </div>
+
+      <div class="collab-members-footer">
+        <button id="collabMembersCloseBtn" class="mini-btn" type="button">关闭</button>
+      </div>
     </div>
   </div>
 

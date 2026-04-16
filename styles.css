@@ -94,6 +94,13 @@ body {
   gap: 6px;
 }
 
+.book-card-head {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
 .book-card-title {
   font-weight: 700;
   flex: 0 0 auto;
@@ -111,6 +118,38 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.book-role-badge {
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 999px;
+  padding: 4px 7px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.book-role-badge.role-owner {
+  background: #fdebd7;
+  color: #7b3e12;
+  border-color: #e5bf95;
+}
+
+.book-role-badge.role-editor {
+  background: #e8f3ff;
+  color: #1b5e95;
+  border-color: #adccec;
+}
+
+.book-role-badge.role-viewer {
+  background: #eef0f3;
+  color: #4f5d6b;
+  border-color: #c8cfd7;
+}
+
+.collab-manage-btn {
+  margin: 0;
+  padding: 3px 7px;
 }
 
 .book-delete-btn {
@@ -333,6 +372,10 @@ body {
   min-width: 0;
 }
 
+.collab-live-hint {
+  white-space: nowrap;
+}
+
 #viewerTitle {
   white-space: nowrap;
   overflow: hidden;
@@ -374,6 +417,68 @@ body {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+}
+
+.presence-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 120;
+}
+
+.remote-cursor {
+  position: absolute;
+  transform: translate(-2px, -2px);
+}
+
+.remote-cursor-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.remote-cursor-label {
+  margin-top: 3px;
+  display: inline-block;
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.collab-activity-feed {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: min(340px, calc(100% - 16px));
+  max-height: 148px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  z-index: 140;
+  pointer-events: none;
+}
+
+.collab-activity-item {
+  background: rgba(30, 24, 17, 0.78);
+  color: #fff;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.draw-layer.readonly-layer {
+  cursor: default;
 }
 
 .box {
@@ -801,6 +906,94 @@ hr {
   width: min(560px, calc(100vw - 24px));
 }
 
+.collab-members-modal-card {
+  width: min(840px, calc(100vw - 24px));
+}
+
+.collab-role-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.collab-role-col {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf2;
+  padding: 8px;
+  min-height: 220px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 8px;
+}
+
+.collab-role-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.collab-role-head .mini-btn {
+  width: auto;
+  margin: 0;
+  padding: 2px 10px;
+}
+
+.collab-role-list {
+  border: 1px dashed #d4c9b3;
+  border-radius: 6px;
+  background: #fff;
+  min-height: 150px;
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.collab-role-list.droppable.drag-over {
+  border-color: var(--brand);
+  background: #fff5ec;
+}
+
+.collab-member-item {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 6px;
+}
+
+.collab-member-item.dragging {
+  opacity: 0.6;
+}
+
+.collab-member-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.collab-member-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.collab-role-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px;
+}
+
+.collab-members-footer {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .xml-hints-list {
   margin-top: 8px;
   border: 1px solid var(--line);
@@ -855,5 +1048,9 @@ hr {
   .layout {
     grid-template-columns: 1fr;
     grid-template-rows: 220px 1fr 420px;
+  }
+
+  .collab-role-grid {
+    grid-template-columns: 1fr;
   }
 }

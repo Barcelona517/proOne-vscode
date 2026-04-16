@@ -24,7 +24,13 @@ const collabState = {
   ws: null,
   wsConnected: false,
   currentBookVersion: 0,
-  pendingWsSave: null
+  pendingWsSave: null,
+  presenceUsers: {},
+  remotePeers: {},
+  activityFeed: [],
+  cursorSendAt: 0,
+  lastCursor: { imageId: "", x: -1, y: -1 },
+  lastActionAt: 0
 };
 
 const seedImages = [
@@ -138,8 +144,11 @@ const el = {
   thumbList: document.getElementById("thumbList"),
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
+  presenceLayer: document.getElementById("presenceLayer"),
+  collabActivityFeed: document.getElementById("collabActivityFeed"),
   viewerTitle: document.getElementById("viewerTitle"),
   viewerTitleInput: document.getElementById("viewerTitleInput"),
+  collabLiveHint: document.getElementById("collabLiveHint"),
   renameImageBtn: document.getElementById("renameImageBtn"),
   mainPanelBtnEdit: document.getElementById("mainPanelBtnEdit"),
   mainPanelBtnGlyph: document.getElementById("mainPanelBtnGlyph"),
@@ -317,6 +326,145 @@ function ensureCanEdit(actionName = "执行编辑操作") {
   return false;
 }
 
+function peerDisplayName(user) {
+  if (!user) return "协作用户";
+  return user.displayName || user.email || "协作用户";
+}
+
+function colorForUserId(userId) {
+  const input = String(userId || "");
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 74% 46%)`;
+}
+
+function resetPresenceState() {
+  collabState.presenceUsers = {};
+  collabState.remotePeers = {};
+  collabState.activityFeed = [];
+  collabState.cursorSendAt = 0;
+  collabState.lastCursor = { imageId: "", x: -1, y: -1 };
+  renderPresenceLayer();
+  renderActivityFeed();
+  renderLivePresenceHint();
+}
+
+function renderLivePresenceHint() {
+  if (!el.collabLiveHint) return;
+  const mine = collabState.user?.id ? 1 : 0;
+  const others = Object.keys(collabState.presenceUsers || {}).length;
+  const total = mine + others;
+  el.collabLiveHint.textContent = `协作在线：${total} 人`;
+}
+
+function renderActivityFeed() {
+  if (!el.collabActivityFeed) return;
+  el.collabActivityFeed.innerHTML = "";
+  const items = Array.isArray(collabState.activityFeed) ? collabState.activityFeed.slice(0, 8) : [];
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "collab-activity-item";
+    row.textContent = item;
+    el.collabActivityFeed.appendChild(row);
+  });
+}
+
+function pushActivityLine(line) {
+  const text = String(line || "").trim();
+  if (!text) return;
+  const next = [text, ...(collabState.activityFeed || [])].slice(0, 8);
+  collabState.activityFeed = next;
+  renderActivityFeed();
+}
+
+function renderPresenceLayer() {
+  if (!el.presenceLayer) return;
+  el.presenceLayer.innerHTML = "";
+  const currentImageId = selectedImage()?.id || "";
+  Object.values(collabState.remotePeers || {}).forEach((peer) => {
+    if (!peer || !peer.imageId || peer.imageId !== currentImageId) return;
+    if (!Number.isFinite(peer.x) || !Number.isFinite(peer.y)) return;
+    const wrapper = document.createElement("div");
+    wrapper.className = "remote-cursor";
+    wrapper.style.left = `${clamp01(peer.x) * 100}%`;
+    wrapper.style.top = `${clamp01(peer.y) * 100}%`;
+
+    const color = colorForUserId(peer.userId);
+    const dot = document.createElement("div");
+    dot.className = "remote-cursor-dot";
+    dot.style.background = color;
+
+    const label = document.createElement("div");
+    label.className = "remote-cursor-label";
+    label.style.background = color;
+    label.textContent = peerDisplayName(peer);
+
+    wrapper.appendChild(dot);
+    wrapper.appendChild(label);
+    el.presenceLayer.appendChild(wrapper);
+  });
+}
+
+function updatePresenceUser(user) {
+  const userId = String(user?.userId || "");
+  if (!userId || userId === String(collabState.user?.id || "")) return;
+  collabState.presenceUsers[userId] = {
+    userId,
+    displayName: String(user?.displayName || ""),
+    email: String(user?.email || "")
+  };
+  renderLivePresenceHint();
+}
+
+function removePresenceUser(userId) {
+  const id = String(userId || "");
+  if (!id) return;
+  delete collabState.presenceUsers[id];
+  delete collabState.remotePeers[id];
+  renderLivePresenceHint();
+  renderPresenceLayer();
+}
+
+function sendPresenceCursor(x, y) {
+  if (!collabState.wsConnected || !currentBookId || !collabState.ws || collabState.ws.readyState !== WebSocket.OPEN) return;
+  const imageId = selectedImage()?.id || "";
+  if (!imageId) return;
+  const now = Date.now();
+  if (now - collabState.cursorSendAt < 50) return;
+  const lx = Number(collabState.lastCursor.x);
+  const ly = Number(collabState.lastCursor.y);
+  const movedEnough = Math.abs(lx - x) > 0.0025 || Math.abs(ly - y) > 0.0025 || collabState.lastCursor.imageId !== imageId;
+  if (!movedEnough) return;
+  collabState.cursorSendAt = now;
+  collabState.lastCursor = { imageId, x, y };
+  collabState.ws.send(JSON.stringify({
+    type: "presence_cursor",
+    bookId: currentBookId,
+    imageId,
+    x: clamp01(x),
+    y: clamp01(y)
+  }));
+}
+
+function sendCollabAction(actionText) {
+  if (!collabState.wsConnected || !currentBookId || !collabState.ws || collabState.ws.readyState !== WebSocket.OPEN) return;
+  const now = Date.now();
+  if (now - collabState.lastActionAt < 300) return;
+  const action = String(actionText || "").trim().slice(0, 120);
+  if (!action) return;
+  collabState.lastActionAt = now;
+  collabState.ws.send(JSON.stringify({
+    type: "presence_action",
+    bookId: currentBookId,
+    imageId: selectedImage()?.id || "",
+    action
+  }));
+}
+
 function updateAuthUi() {
   const currentRole = getCurrentBookRole();
   if (el.authUserLabel) {
@@ -372,6 +520,7 @@ function closeCollabSocket() {
   }
   collabState.ws = null;
   collabState.wsConnected = false;
+  resetPresenceState();
   if (collabState.pendingWsSave?.reject) {
     collabState.pendingWsSave.reject(new Error("协作连接已断开"));
   }
@@ -410,6 +559,7 @@ function connectCollabSocket() {
 
   ws.addEventListener("open", () => {
     collabState.wsConnected = true;
+    resetPresenceState();
     if (currentBookId) {
       ws.send(JSON.stringify({ type: "subscribe", bookId: currentBookId }));
     }
@@ -417,6 +567,7 @@ function connectCollabSocket() {
 
   ws.addEventListener("close", () => {
     collabState.wsConnected = false;
+    resetPresenceState();
     if (collabState.ws === ws) {
       collabState.ws = null;
     }
@@ -430,11 +581,74 @@ function connectCollabSocket() {
     try {
       const msg = JSON.parse(String(evt.data || "{}"));
       if (msg.type === "subscribed" && msg.book) {
+        resetPresenceState();
         updateBookMetaFromCollabBook(msg.book);
         collabState.currentBookVersion = Number(msg.book.version || collabState.currentBookVersion || 1);
         renderBooksList();
         return;
       }
+
+      if (msg.type === "presence_snapshot") {
+        const users = Array.isArray(msg.users) ? msg.users : [];
+        const nextMap = {};
+        users.forEach((item) => {
+          const userId = String(item?.userId || "");
+          if (!userId || userId === String(collabState.user?.id || "")) return;
+          nextMap[userId] = {
+            userId,
+            displayName: String(item?.displayName || ""),
+            email: String(item?.email || "")
+          };
+        });
+        collabState.presenceUsers = nextMap;
+        renderLivePresenceHint();
+        return;
+      }
+
+      if (msg.type === "presence_join") {
+        updatePresenceUser(msg.user);
+        const name = peerDisplayName(msg.user);
+        pushActivityLine(`${name} 进入了协作`);
+        return;
+      }
+
+      if (msg.type === "presence_leave") {
+        const userId = String(msg?.user?.userId || "");
+        const name = peerDisplayName(msg.user);
+        removePresenceUser(userId);
+        pushActivityLine(`${name} 离开了协作`);
+        return;
+      }
+
+      if (msg.type === "presence_cursor") {
+        const userId = String(msg?.user?.userId || "");
+        if (!userId || userId === String(collabState.user?.id || "")) return;
+        updatePresenceUser(msg.user);
+        collabState.remotePeers[userId] = {
+          userId,
+          displayName: String(msg?.user?.displayName || ""),
+          email: String(msg?.user?.email || ""),
+          imageId: String(msg?.imageId || ""),
+          x: Number(msg?.x),
+          y: Number(msg?.y),
+          ts: Number(msg?.ts || Date.now())
+        };
+        renderPresenceLayer();
+        return;
+      }
+
+      if (msg.type === "presence_action") {
+        const userId = String(msg?.user?.userId || "");
+        if (!userId || userId === String(collabState.user?.id || "")) return;
+        updatePresenceUser(msg.user);
+        const name = peerDisplayName(msg.user);
+        const action = String(msg?.action || "").trim();
+        if (action) {
+          pushActivityLine(`${name}：${action}`);
+        }
+        return;
+      }
+
       if (msg.type === "book_updated" && msg.book) {
         updateBookMetaFromCollabBook(msg.book);
         if (msg.book.id === currentBookId) {
@@ -507,6 +721,7 @@ async function reloadWorkspaceByMode() {
   state.draftRect = null;
   currentBookId = null;
   collabState.currentBookVersion = 0;
+  resetPresenceState();
   await loadState();
   renderAll();
   updateAuthUi();
@@ -2145,6 +2360,11 @@ function syncDrawLayerSize() {
   const h = el.mainImage.clientHeight || 0;
   el.drawLayer.style.width = `${w}px`;
   el.drawLayer.style.height = `${h}px`;
+  if (el.presenceLayer) {
+    el.presenceLayer.style.width = `${w}px`;
+    el.presenceLayer.style.height = `${h}px`;
+  }
+  renderPresenceLayer();
 }
 
 function templateDepth(tagId) {
@@ -2883,6 +3103,7 @@ async function openBookById(bookId) {
   showEditorView();
   updateAuthUi();
   renderAll();
+  sendCollabAction("进入了书籍");
 }
 
 async function createBookRecord(name, data) {
@@ -4001,6 +4222,9 @@ function renderAll() {
   renderMainPanelTabs();
   renderRightPanelTabs();
   renderGlyphPanel();
+  renderPresenceLayer();
+  renderActivityFeed();
+  renderLivePresenceHint();
   syncEditorPermissionUi();
 }
 
@@ -4227,6 +4451,7 @@ function bindDrawEvents() {
         const overlapAfterIds = getCoveredAnnoIds(img, resizeAnno.id, resizeAnno.rect);
         notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
         saveState();
+        sendCollabAction("调整了方框大小");
         suppressLayerClick = true;
       }
       resizingAnnoId = null;
@@ -4258,6 +4483,7 @@ function bindDrawEvents() {
         const overlapAfterIds = getCoveredAnnoIds(img, movingAnno.id, movingAnno.rect);
         notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
         saveState();
+        sendCollabAction("移动了方框位置");
         suppressLayerClick = true;
       }
       movingAnnoId = null;
@@ -4326,6 +4552,14 @@ function bindDrawEvents() {
       state.selectedAnnoId = picked ? picked.id : null;
       renderAll();
     }
+  });
+
+  el.drawLayer.addEventListener("mousemove", (evt) => {
+    const rect = el.drawLayer.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = clamp01((evt.clientX - rect.left) / rect.width);
+    const y = clamp01((evt.clientY - rect.top) / rect.height);
+    sendPresenceCursor(x, y);
   });
 }
 
@@ -4614,6 +4848,7 @@ function bindEvents() {
         await autoDrawLayoutByAI();
         renderAll();
         saveState();
+        sendCollabAction("执行了自动画框");
       } catch (err) {
         alert(err?.message || "自动画框失败");
       } finally {
@@ -4677,6 +4912,7 @@ function bindEvents() {
       Promise.resolve()
         .then(async () => {
           await importSelectedFile(file);
+          sendCollabAction(`上传了文件：${file.name}`);
         })
         .catch((err) => {
           alert(err?.message || "导入失败");
@@ -4792,6 +5028,7 @@ function bindEvents() {
         await persistGlyphRecordToServer(createdAnno);
         renderAll();
         saveState();
+        sendCollabAction("保存了造字记录");
         if (el.glyphCreateHint) {
           el.glyphCreateHint.textContent = "已保存到本地和数据库";
         }
@@ -4882,6 +5119,7 @@ function bindEvents() {
     }
     renderAll();
     saveState();
+    sendCollabAction(`批量删除了 ${selectedIds.size} 张图片`);
   });
 
   el.clearDraftBtn.addEventListener("click", () => {
@@ -4933,6 +5171,7 @@ function bindEvents() {
     el.draftTagAttrs.value = "";
     renderAll();
     saveState();
+    sendCollabAction(`新增了标签 ${newTag.name}`);
   });
 
   el.saveAnnoBtn.addEventListener("click", () => {
@@ -4950,6 +5189,7 @@ function bindEvents() {
     const draftTranscription = textEnabled ? el.annoTranscription.value.trim() : "";
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
+    const savedCount = state.pendingDrafts.length;
     const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
       defaultTranscription: textEnabled ? draftTranscription : "",
       defaultMeaning: textEnabled ? draftMeaning : "",
@@ -4964,6 +5204,7 @@ function bindEvents() {
     if (el.annoMeaning) el.annoMeaning.value = "";
     renderAll();
     saveState();
+    sendCollabAction(`保存了 ${savedCount} 个标注`);
   });
 
   el.saveCurrentPropsBtn.addEventListener("click", () => {
@@ -5005,6 +5246,7 @@ function bindEvents() {
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();
     saveState();
+    sendCollabAction("更新了标注属性");
   });
 
   el.templateTagSelect.addEventListener("change", () => {

@@ -804,12 +804,46 @@ function verifyTokenFromReq(req) {
   const payload = jwt.verify(token, jwtSecret);
   return {
     id: String(payload.sub || ""),
-    email: String(payload.email || "")
+    email: String(payload.email || ""),
+    displayName: String(payload.displayName || "")
   };
+}
+
+function compactUserForPresence(user) {
+  return {
+    userId: String(user?.id || ""),
+    email: String(user?.email || ""),
+    displayName: String(user?.displayName || "")
+  };
+}
+
+function getRoomPresenceSnapshot(bookId) {
+  const members = wsRooms.get(bookId);
+  if (!members || members.size === 0) return [];
+  const seen = new Set();
+  const users = [];
+  members.forEach((client) => {
+    const id = String(client?.user?.id || "");
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    users.push(compactUserForPresence(client.user));
+  });
+  return users;
+}
+
+function normalizePresenceCoord(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return clamp01(n);
+}
+
+function normalizeActionText(action) {
+  return String(action || "").trim().slice(0, 120);
 }
 
 wss.on("connection", (ws, req, user) => {
   ws.user = user;
+  ws.currentBookId = "";
 
   ws.on("message", async (raw) => {
     try {
@@ -830,9 +864,38 @@ wss.on("connection", (ws, req, user) => {
           wsSend(ws, { type: "error", message: "无权限订阅该书籍" });
           return;
         }
+
+        const prevBookId = String(ws.currentBookId || "").trim();
+        if (prevBookId && prevBookId !== bookId) {
+          const prevMembers = wsRooms.get(prevBookId);
+          if (prevMembers) {
+            prevMembers.delete(ws);
+            if (prevMembers.size === 0) wsRooms.delete(prevBookId);
+          }
+          broadcastBook(prevBookId, {
+            type: "presence_leave",
+            bookId: prevBookId,
+            user: compactUserForPresence(ws.user),
+            ts: Date.now()
+          }, ws);
+        }
+
         addToRoom(bookId, ws);
+        ws.currentBookId = bookId;
         const book = await collabStore.getBookForUser(bookId, ws.user.id);
         wsSend(ws, { type: "subscribed", bookId, book });
+        wsSend(ws, {
+          type: "presence_snapshot",
+          bookId,
+          users: getRoomPresenceSnapshot(bookId),
+          ts: Date.now()
+        });
+        broadcastBook(bookId, {
+          type: "presence_join",
+          bookId,
+          user: compactUserForPresence(ws.user),
+          ts: Date.now()
+        }, ws);
         return;
       }
 
@@ -855,6 +918,54 @@ wss.on("connection", (ws, req, user) => {
         return;
       }
 
+      if (type === "presence_cursor") {
+        const bookId = String(message?.bookId || "").trim();
+        const imageId = String(message?.imageId || "").trim();
+        const x = normalizePresenceCoord(message?.x);
+        const y = normalizePresenceCoord(message?.y);
+        if (!bookId || x == null || y == null) {
+          return;
+        }
+        if (String(ws.currentBookId || "") !== bookId) {
+          return;
+        }
+        const canAccess = await collabStore.canAccessBook(bookId, ws.user.id);
+        if (!canAccess) return;
+        broadcastBook(bookId, {
+          type: "presence_cursor",
+          bookId,
+          imageId,
+          x,
+          y,
+          user: compactUserForPresence(ws.user),
+          ts: Date.now()
+        }, ws);
+        return;
+      }
+
+      if (type === "presence_action") {
+        const bookId = String(message?.bookId || "").trim();
+        const imageId = String(message?.imageId || "").trim();
+        const action = normalizeActionText(message?.action);
+        if (!bookId || !action) {
+          return;
+        }
+        if (String(ws.currentBookId || "") !== bookId) {
+          return;
+        }
+        const canAccess = await collabStore.canAccessBook(bookId, ws.user.id);
+        if (!canAccess) return;
+        broadcastBook(bookId, {
+          type: "presence_action",
+          bookId,
+          imageId,
+          action,
+          user: compactUserForPresence(ws.user),
+          ts: Date.now()
+        }, ws);
+        return;
+      }
+
       wsSend(ws, { type: "error", message: `未知消息类型: ${type || "(empty)"}` });
     } catch (err) {
       wsSend(ws, { type: "error", message: err?.message || "消息处理失败" });
@@ -862,6 +973,15 @@ wss.on("connection", (ws, req, user) => {
   });
 
   ws.on("close", () => {
+    const bookId = String(ws.currentBookId || "").trim();
+    if (bookId) {
+      broadcastBook(bookId, {
+        type: "presence_leave",
+        bookId,
+        user: compactUserForPresence(ws.user),
+        ts: Date.now()
+      }, ws);
+    }
     removeFromRooms(ws);
   });
 });
