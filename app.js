@@ -207,7 +207,7 @@ function fileToDisplayName(path) { return path.split("/").pop() || path; }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 function isCollabMode() {
-  return !!collabState.token;
+  return true;
 }
 
 function setCollabToken(token) {
@@ -260,7 +260,7 @@ function updateAuthUi() {
   if (el.authUserLabel) {
     el.authUserLabel.textContent = collabState.user
       ? `协作用户：${collabState.user.displayName || collabState.user.email || "已登录"}`
-      : "本地模式";
+      : "";
   }
   if (el.authOpenBtn) el.authOpenBtn.classList.toggle("hidden", !!collabState.user);
   if (el.authLogoutBtn) el.authLogoutBtn.classList.toggle("hidden", !collabState.user);
@@ -2388,32 +2388,19 @@ async function migrateLocalStorageBooksIfNeeded() {
 
 function saveState(options = {}) {
   if (!currentBookId) return Promise.resolve();
+  if (!collabState.token) return Promise.resolve();
   const wait = !!options.wait;
   const payload = collectCurrentBookData();
-
-  if (isCollabMode()) {
-    const nextTask = async () => {
-      let updatedBook;
-      const books = loadBooksIndex();
-      const meta = books.find((item) => item.id === currentBookId);
-      const nextName = meta?.name || "未命名书籍";
-      const baseVersion = Number(meta?.version || collabState.currentBookVersion || 1);
-      if (collabState.wsConnected) {
-        try {
-          updatedBook = await sendWsSaveBook(currentBookId, nextName, payload, baseVersion);
-        } catch (_) {
-          const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: nextName,
-              payload,
-              baseVersion
-            })
-          });
-          updatedBook = data?.book;
-        }
-      } else {
+  const nextTask = async () => {
+    let updatedBook;
+    const books = loadBooksIndex();
+    const meta = books.find((item) => item.id === currentBookId);
+    const nextName = meta?.name || "未命名书籍";
+    const baseVersion = Number(meta?.version || collabState.currentBookVersion || 1);
+    if (collabState.wsConnected) {
+      try {
+        updatedBook = await sendWsSaveBook(currentBookId, nextName, payload, baseVersion);
+      } catch (_) {
         const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -2425,28 +2412,22 @@ function saveState(options = {}) {
         });
         updatedBook = data?.book;
       }
+    } else {
+      const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: nextName,
+          payload,
+          baseVersion
+        })
+      });
+      updatedBook = data?.book;
+    }
 
-      if (updatedBook) {
-        collabState.currentBookVersion = Number(updatedBook.version || collabState.currentBookVersion || 1);
-        updateBookMetaFromCollabBook(updatedBook);
-      }
-    };
-
-    saveStateQueue = saveStateQueue.then(nextTask).catch((err) => {
-      reportSaveError(err);
-    });
-    return wait ? saveStateQueue : Promise.resolve();
-  }
-
-  const nextTask = async () => {
-    await dbSaveBookData(currentBookId, payload);
-    const books = loadBooksIndex();
-    const idx = books.findIndex((b) => b.id === currentBookId);
-    if (idx >= 0) {
-      books[idx].updatedAt = new Date().toISOString();
-      books[idx].imageCount = state.images.length;
-      saveBooksIndex(books);
-      await persistBooksIndex();
+    if (updatedBook) {
+      collabState.currentBookVersion = Number(updatedBook.version || collabState.currentBookVersion || 1);
+      updateBookMetaFromCollabBook(updatedBook);
     }
   };
   saveStateQueue = saveStateQueue.then(nextTask).catch((err) => {
@@ -2456,31 +2437,26 @@ function saveState(options = {}) {
 }
 
 async function openBookById(bookId) {
+  if (!collabState.token) {
+    showAuthModal();
+    return;
+  }
   if (currentBookId && currentBookId !== bookId) {
     await saveState({ wait: true });
   }
 
-  let parsed = null;
-  if (isCollabMode()) {
-    const data = await collabFetch(`/api/collab/books/${bookId}`);
-    const book = data?.book;
-    if (!book) {
-      alert("书籍数据不存在");
-      return;
-    }
-    parsed = book.payload || {};
-    collabState.currentBookVersion = Number(book.version || 1);
-    updateBookMetaFromCollabBook(book);
-    connectCollabSocket();
-    if (collabState.ws && collabState.ws.readyState === WebSocket.OPEN) {
-      collabState.ws.send(JSON.stringify({ type: "subscribe", bookId }));
-    }
-  } else {
-    parsed = await dbLoadBookData(bookId);
-    if (!parsed) {
-      alert("书籍数据不存在");
-      return;
-    }
+  const data = await collabFetch(`/api/collab/books/${bookId}`);
+  const book = data?.book;
+  if (!book) {
+    alert("书籍数据不存在");
+    return;
+  }
+  const parsed = book.payload || {};
+  collabState.currentBookVersion = Number(book.version || 1);
+  updateBookMetaFromCollabBook(book);
+  connectCollabSocket();
+  if (collabState.ws && collabState.ws.readyState === WebSocket.OPEN) {
+    collabState.ws.send(JSON.stringify({ type: "subscribe", bookId }));
   }
 
   applyBookData(parsed);
@@ -2493,97 +2469,61 @@ async function openBookById(bookId) {
 }
 
 async function createBookRecord(name, data) {
-  if (isCollabMode()) {
-    const res = await collabFetch("/api/collab/books", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: String(name || "").trim() || "未命名书籍",
-        payload: data || {}
-      })
-    });
-    const book = res?.book;
-    if (!book?.id) throw new Error("创建书籍失败");
-    updateBookMetaFromCollabBook(book);
-    collabState.currentBookVersion = Number(book.version || 1);
-    return book.id;
+  if (!collabState.token) {
+    showAuthModal();
+    throw new Error("请先登录协作账号");
   }
 
-  const books = loadBooksIndex();
-  const bookId = uid("book");
-  const now = new Date().toISOString();
-  books.unshift({
-    id: bookId,
-    name: String(name || `新建书籍_${books.length + 1}`),
-    createdAt: now,
-    updatedAt: now,
-    imageCount: Array.isArray(data.images) ? data.images.length : 0
+  const res = await collabFetch("/api/collab/books", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: String(name || "").trim() || "未命名书籍",
+      payload: data || {}
+    })
   });
-  saveBooksIndex(books);
-  await dbSaveBookData(bookId, data);
-  await persistBooksIndex();
-  return bookId;
+  const book = res?.book;
+  if (!book?.id) throw new Error("创建书籍失败");
+  updateBookMetaFromCollabBook(book);
+  collabState.currentBookVersion = Number(book.version || 1);
+  return book.id;
 }
 
 async function renameBookRecord(bookId, nextName) {
-  if (isCollabMode()) {
-    const normalized = String(nextName || "").trim();
-    if (!normalized) throw new Error("书籍名称不能为空");
-    const detail = await collabFetch(`/api/collab/books/${bookId}`);
-    const currentBook = detail?.book;
-    if (!currentBook) throw new Error("书籍不存在");
-    const updated = await collabFetch(`/api/collab/books/${bookId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: normalized,
-        payload: currentBook.payload || {},
-        baseVersion: Number(currentBook.version || 1)
-      })
-    });
-    if (updated?.book) {
-      updateBookMetaFromCollabBook(updated.book);
-      if (currentBookId === bookId) {
-        collabState.currentBookVersion = Number(updated.book.version || collabState.currentBookVersion || 1);
-      }
-    }
-    return;
+  if (!collabState.token) {
+    showAuthModal();
+    throw new Error("请先登录协作账号");
   }
-
-  const books = loadBooksIndex();
-  const idx = books.findIndex((item) => item.id === bookId);
-  if (idx < 0) throw new Error("书籍不存在");
   const normalized = String(nextName || "").trim();
   if (!normalized) throw new Error("书籍名称不能为空");
-  books[idx].name = normalized;
-  books[idx].updatedAt = new Date().toISOString();
-  saveBooksIndex(books);
-  await persistBooksIndex();
+  const detail = await collabFetch(`/api/collab/books/${bookId}`);
+  const currentBook = detail?.book;
+  if (!currentBook) throw new Error("书籍不存在");
+  const updated = await collabFetch(`/api/collab/books/${bookId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: normalized,
+      payload: currentBook.payload || {},
+      baseVersion: Number(currentBook.version || 1)
+    })
+  });
+  if (updated?.book) {
+    updateBookMetaFromCollabBook(updated.book);
+    if (currentBookId === bookId) {
+      collabState.currentBookVersion = Number(updated.book.version || collabState.currentBookVersion || 1);
+    }
+  }
 }
 
 async function deleteBookRecord(bookId) {
-  if (isCollabMode()) {
-    await collabFetch(`/api/collab/books/${bookId}`, { method: "DELETE" });
-    const books = loadBooksIndex().filter((item) => item.id !== bookId);
-    saveBooksIndex(books);
-    const lastOpenedId = await getLastOpenedBookId();
-    if (lastOpenedId === bookId) {
-      await setLastOpenedBookId("");
-    }
-    if (currentBookId === bookId) {
-      currentBookId = null;
-      collabState.currentBookVersion = 0;
-      await setLastView("library");
-    }
-    return;
+  if (!collabState.token) {
+    showAuthModal();
+    throw new Error("请先登录协作账号");
   }
-
-  const books = loadBooksIndex();
-  const nextBooks = books.filter((item) => item.id !== bookId);
-  if (nextBooks.length === books.length) throw new Error("书籍不存在");
-  saveBooksIndex(nextBooks);
-  await dbDeleteBookData(bookId);
-  await persistBooksIndex();
+  await collabFetch(`/api/collab/books/${bookId}`, { method: "DELETE" });
+  const books = loadBooksIndex().filter((item) => item.id !== bookId);
+  saveBooksIndex(books);
   const lastOpenedId = await getLastOpenedBookId();
   if (lastOpenedId === bookId) {
     await setLastOpenedBookId("");
@@ -2673,53 +2613,31 @@ function renderBooksList() {
 }
 
 async function loadState() {
-  if (isCollabMode()) {
+  if (!collabState.token || !collabState.user) {
     booksIndexCache = [];
-    const resp = await collabFetch("/api/collab/books");
-    const books = Array.isArray(resp?.books) ? resp.books : [];
-    saveBooksIndex(books.map((book) => ({
-      id: book.id,
-      name: book.name || "未命名书籍",
-      createdAt: book.createdAt || new Date().toISOString(),
-      updatedAt: book.updatedAt || new Date().toISOString(),
-      imageCount: Array.isArray(book.payload?.images) ? book.payload.images.length : 0,
-      ownerUserId: book.ownerUserId || "",
-      role: book.role || "viewer",
-      version: Number(book.version || 1)
-    })));
-    const indexBooks = loadBooksIndex();
-    if (indexBooks.length === 0) {
-      currentBookId = null;
-      await setLastView("library");
-      await setLastOpenedBookId("");
-      showLibraryView();
-      updateAuthUi();
-      renderBooksList();
-      return;
-    }
-
-    const lastView = await getLastView();
-    const lastOpenedBookId = await getLastOpenedBookId();
-    if (lastView === "editor" && lastOpenedBookId && indexBooks.some((book) => book.id === lastOpenedBookId)) {
-      await openBookById(lastOpenedBookId);
-      return;
-    }
-
-    await setLastView("library");
+    currentBookId = null;
     showLibraryView();
     updateAuthUi();
     renderBooksList();
+    showAuthModal();
     return;
   }
 
-  await openStorageDb();
-  booksIndexCache = await dbLoadBooksIndex();
-  await migrateLocalStorageBooksIfNeeded();
-  booksIndexCache = await dbLoadBooksIndex();
-  const books = loadBooksIndex();
-  if (books.length === 0) {
-    const data = createDefaultBookData();
-    applyBookData(data);
+  booksIndexCache = [];
+  const resp = await collabFetch("/api/collab/books");
+  const books = Array.isArray(resp?.books) ? resp.books : [];
+  saveBooksIndex(books.map((book) => ({
+    id: book.id,
+    name: book.name || "未命名书籍",
+    createdAt: book.createdAt || new Date().toISOString(),
+    updatedAt: book.updatedAt || new Date().toISOString(),
+    imageCount: Array.isArray(book.payload?.images) ? book.payload.images.length : 0,
+    ownerUserId: book.ownerUserId || "",
+    role: book.role || "viewer",
+    version: Number(book.version || 1)
+  })));
+  const indexBooks = loadBooksIndex();
+  if (indexBooks.length === 0) {
     currentBookId = null;
     await setLastView("library");
     await setLastOpenedBookId("");
@@ -2731,7 +2649,7 @@ async function loadState() {
 
   const lastView = await getLastView();
   const lastOpenedBookId = await getLastOpenedBookId();
-  if (lastView === "editor" && lastOpenedBookId && books.some((book) => book.id === lastOpenedBookId)) {
+  if (lastView === "editor" && lastOpenedBookId && indexBooks.some((book) => book.id === lastOpenedBookId)) {
     await openBookById(lastOpenedBookId);
     return;
   }
@@ -3679,6 +3597,10 @@ function bindEvents() {
 
   if (el.newBookBtn && el.libraryImportInput) {
     el.newBookBtn.addEventListener("click", () => {
+      if (!collabState.user) {
+        showAuthModal();
+        return;
+      }
       el.libraryImportInput.click();
     });
   }
@@ -3710,6 +3632,7 @@ function bindEvents() {
       setCollabToken("");
       collabState.user = null;
       closeCollabSocket();
+      collabState.currentBookVersion = 0;
       hideAuthModal();
       await reloadWorkspaceByMode();
     });
@@ -4280,7 +4203,7 @@ async function initApp() {
   bindDrawEvents();
   bindEvents();
   await bootstrapAuthUser();
-  if (isCollabMode()) {
+  if (collabState.token) {
     connectCollabSocket();
   }
   await loadState();
