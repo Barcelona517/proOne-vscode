@@ -456,27 +456,6 @@ body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
 
-.collab-activity-feed {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: min(340px, calc(100% - 16px));
-  max-height: 148px;
-  overflow: auto;
-  display: grid;
-  gap: 6px;
-  z-index: 140;
-  pointer-events: none;
-}
-
-.collab-activity-item {
-  background: rgba(30, 24, 17, 0.78);
-  color: #fff;
-  border-radius: 8px;
-  padding: 5px 8px;
-  font-size: 12px;
-}
-
 .draw-layer.readonly-layer {
   cursor: default;
 }

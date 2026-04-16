@@ -27,10 +27,8 @@ const collabState = {
   pendingWsSave: null,
   presenceUsers: {},
   remotePeers: {},
-  activityFeed: [],
   cursorSendAt: 0,
-  lastCursor: { imageId: "", x: -1, y: -1 },
-  lastActionAt: 0
+  lastCursor: { imageId: "", x: -1, y: -1 }
 };
 
 const seedImages = [
@@ -145,7 +143,6 @@ const el = {
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
   presenceLayer: document.getElementById("presenceLayer"),
-  collabActivityFeed: document.getElementById("collabActivityFeed"),
   viewerTitle: document.getElementById("viewerTitle"),
   viewerTitleInput: document.getElementById("viewerTitleInput"),
   collabLiveHint: document.getElementById("collabLiveHint"),
@@ -345,11 +342,9 @@ function colorForUserId(userId) {
 function resetPresenceState() {
   collabState.presenceUsers = {};
   collabState.remotePeers = {};
-  collabState.activityFeed = [];
   collabState.cursorSendAt = 0;
   collabState.lastCursor = { imageId: "", x: -1, y: -1 };
   renderPresenceLayer();
-  renderActivityFeed();
   renderLivePresenceHint();
 }
 
@@ -359,26 +354,6 @@ function renderLivePresenceHint() {
   const others = Object.keys(collabState.presenceUsers || {}).length;
   const total = mine + others;
   el.collabLiveHint.textContent = `协作在线：${total} 人`;
-}
-
-function renderActivityFeed() {
-  if (!el.collabActivityFeed) return;
-  el.collabActivityFeed.innerHTML = "";
-  const items = Array.isArray(collabState.activityFeed) ? collabState.activityFeed.slice(0, 8) : [];
-  items.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "collab-activity-item";
-    row.textContent = item;
-    el.collabActivityFeed.appendChild(row);
-  });
-}
-
-function pushActivityLine(line) {
-  const text = String(line || "").trim();
-  if (!text) return;
-  const next = [text, ...(collabState.activityFeed || [])].slice(0, 8);
-  collabState.activityFeed = next;
-  renderActivityFeed();
 }
 
 function renderPresenceLayer() {
@@ -447,21 +422,6 @@ function sendPresenceCursor(x, y) {
     imageId,
     x: clamp01(x),
     y: clamp01(y)
-  }));
-}
-
-function sendCollabAction(actionText) {
-  if (!collabState.wsConnected || !currentBookId || !collabState.ws || collabState.ws.readyState !== WebSocket.OPEN) return;
-  const now = Date.now();
-  if (now - collabState.lastActionAt < 300) return;
-  const action = String(actionText || "").trim().slice(0, 120);
-  if (!action) return;
-  collabState.lastActionAt = now;
-  collabState.ws.send(JSON.stringify({
-    type: "presence_action",
-    bookId: currentBookId,
-    imageId: selectedImage()?.id || "",
-    action
   }));
 }
 
@@ -607,16 +567,12 @@ function connectCollabSocket() {
 
       if (msg.type === "presence_join") {
         updatePresenceUser(msg.user);
-        const name = peerDisplayName(msg.user);
-        pushActivityLine(`${name} 进入了协作`);
         return;
       }
 
       if (msg.type === "presence_leave") {
         const userId = String(msg?.user?.userId || "");
-        const name = peerDisplayName(msg.user);
         removePresenceUser(userId);
-        pushActivityLine(`${name} 离开了协作`);
         return;
       }
 
@@ -634,18 +590,6 @@ function connectCollabSocket() {
           ts: Number(msg?.ts || Date.now())
         };
         renderPresenceLayer();
-        return;
-      }
-
-      if (msg.type === "presence_action") {
-        const userId = String(msg?.user?.userId || "");
-        if (!userId || userId === String(collabState.user?.id || "")) return;
-        updatePresenceUser(msg.user);
-        const name = peerDisplayName(msg.user);
-        const action = String(msg?.action || "").trim();
-        if (action) {
-          pushActivityLine(`${name}：${action}`);
-        }
         return;
       }
 
@@ -3103,7 +3047,6 @@ async function openBookById(bookId) {
   showEditorView();
   updateAuthUi();
   renderAll();
-  sendCollabAction("进入了书籍");
 }
 
 async function createBookRecord(name, data) {
@@ -4223,7 +4166,6 @@ function renderAll() {
   renderRightPanelTabs();
   renderGlyphPanel();
   renderPresenceLayer();
-  renderActivityFeed();
   renderLivePresenceHint();
   syncEditorPermissionUi();
 }
@@ -4451,7 +4393,6 @@ function bindDrawEvents() {
         const overlapAfterIds = getCoveredAnnoIds(img, resizeAnno.id, resizeAnno.rect);
         notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
         saveState();
-        sendCollabAction("调整了方框大小");
         suppressLayerClick = true;
       }
       resizingAnnoId = null;
@@ -4483,7 +4424,6 @@ function bindDrawEvents() {
         const overlapAfterIds = getCoveredAnnoIds(img, movingAnno.id, movingAnno.rect);
         notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
         saveState();
-        sendCollabAction("移动了方框位置");
         suppressLayerClick = true;
       }
       movingAnnoId = null;
@@ -4848,7 +4788,6 @@ function bindEvents() {
         await autoDrawLayoutByAI();
         renderAll();
         saveState();
-        sendCollabAction("执行了自动画框");
       } catch (err) {
         alert(err?.message || "自动画框失败");
       } finally {
@@ -4912,7 +4851,6 @@ function bindEvents() {
       Promise.resolve()
         .then(async () => {
           await importSelectedFile(file);
-          sendCollabAction(`上传了文件：${file.name}`);
         })
         .catch((err) => {
           alert(err?.message || "导入失败");
@@ -5028,7 +4966,6 @@ function bindEvents() {
         await persistGlyphRecordToServer(createdAnno);
         renderAll();
         saveState();
-        sendCollabAction("保存了造字记录");
         if (el.glyphCreateHint) {
           el.glyphCreateHint.textContent = "已保存到本地和数据库";
         }
@@ -5119,7 +5056,6 @@ function bindEvents() {
     }
     renderAll();
     saveState();
-    sendCollabAction(`批量删除了 ${selectedIds.size} 张图片`);
   });
 
   el.clearDraftBtn.addEventListener("click", () => {
@@ -5171,7 +5107,6 @@ function bindEvents() {
     el.draftTagAttrs.value = "";
     renderAll();
     saveState();
-    sendCollabAction(`新增了标签 ${newTag.name}`);
   });
 
   el.saveAnnoBtn.addEventListener("click", () => {
@@ -5189,7 +5124,6 @@ function bindEvents() {
     const draftTranscription = textEnabled ? el.annoTranscription.value.trim() : "";
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
-    const savedCount = state.pendingDrafts.length;
     const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
       defaultTranscription: textEnabled ? draftTranscription : "",
       defaultMeaning: textEnabled ? draftMeaning : "",
@@ -5204,7 +5138,6 @@ function bindEvents() {
     if (el.annoMeaning) el.annoMeaning.value = "";
     renderAll();
     saveState();
-    sendCollabAction(`保存了 ${savedCount} 个标注`);
   });
 
   el.saveCurrentPropsBtn.addEventListener("click", () => {
@@ -5246,7 +5179,6 @@ function bindEvents() {
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();
     saveState();
-    sendCollabAction("更新了标注属性");
   });
 
   el.templateTagSelect.addEventListener("change", () => {
