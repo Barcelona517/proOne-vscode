@@ -51,7 +51,13 @@ body {
   font-size: 17px;
   margin: 0;
 }
+
+.library-title-actions {
+  display: flex;
+  align-items: center;
   gap: 8px;
+}
+
 .library-main {
   padding: 14px;
   overflow: auto;

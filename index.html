@@ -9,13 +9,15 @@
 <body>
   <div id="libraryShell" class="library-shell">
     <header class="library-topbar">
-      <h1>古籍书籍库</h1>
+      <div class="library-title-actions">
+        <h1>古籍库</h1>
+        <button id="newBookBtn" class="primary" type="button">新建</button>
+      </div>
       <div class="topbar-actions">
         <span id="authUserLabel" class="muted"></span>
-        <button id="authOpenBtn" class="mini-btn" type="button">协作登录</button>
+        <button id="authOpenBtn" class="primary" type="button">登录</button>
         <button id="authLogoutBtn" class="mini-btn hidden" type="button">退出协作</button>
         <input id="libraryImportInput" type="file" accept="image/*,.pdf,application/pdf,.xml,text/xml,application/xml" class="hidden" />
-        <button id="newBookBtn" class="primary" type="button">新建</button>
       </div>
     </header>
     <main class="library-main">
