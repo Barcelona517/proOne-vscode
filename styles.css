@@ -51,7 +51,7 @@ body {
   font-size: 17px;
   margin: 0;
 }
-
+  gap: 8px;
 .library-main {
   padding: 14px;
   overflow: auto;
@@ -60,7 +60,7 @@ body {
 .books-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
+  gap: 8px;
 }
 
 .book-card {
@@ -69,12 +69,21 @@ body {
   background: var(--panel);
   box-shadow: var(--shadow);
   padding: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   display: grid;
   gap: 6px;
 }
 
 .book-card-title {
   font-weight: 700;
+  flex: 0 0 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .book-card-meta {
@@ -96,7 +105,7 @@ body {
 
 #authUserLabel {
   font-size: 12px;
-  max-width: 220px;
+  max-width: 140px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

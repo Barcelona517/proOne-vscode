@@ -270,6 +270,11 @@ function updateAuthUi() {
 function showAuthModal() {
   if (!el.authModal) return;
   el.authModal.classList.remove("hidden");
+  if (el.authEmailInput) {
+    window.setTimeout(() => {
+      el.authEmailInput.focus();
+    }, 0);
+  }
 }
 
 function hideAuthModal() {
@@ -2615,6 +2620,10 @@ function renderBooksList() {
     enterBtn.className = "primary";
     enterBtn.textContent = "进入书籍";
     enterBtn.addEventListener("click", () => {
+      if (!collabState.user) {
+        showAuthModal();
+        return;
+      }
       openBookById(book.id).catch((err) => {
         alert(err?.message || "打开书籍失败");
       });
