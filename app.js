@@ -99,7 +99,13 @@ const state = {
   objectStyleInputs: {},
   draggingThumbId: null,
   batchDeleteImageIds: [],
-  renamingImage: false
+  renamingImage: false,
+  collabPanel: {
+    openBookId: "",
+    loading: false,
+    bookRole: "viewer",
+    members: []
+  }
 };
 
 const el = {
@@ -119,6 +125,16 @@ const el = {
   authLoginSubmitBtn: document.getElementById("authLoginSubmitBtn"),
   authRegisterSubmitBtn: document.getElementById("authRegisterSubmitBtn"),
   authCancelBtn: document.getElementById("authCancelBtn"),
+  collabMembersModal: document.getElementById("collabMembersModal"),
+  collabMembersTitle: document.getElementById("collabMembersTitle"),
+  collabMembersHint: document.getElementById("collabMembersHint"),
+  collabRoleOwnerList: document.getElementById("collabRoleOwnerList"),
+  collabRoleEditorList: document.getElementById("collabRoleEditorList"),
+  collabRoleViewerList: document.getElementById("collabRoleViewerList"),
+  collabAddOwnerBtn: document.getElementById("collabAddOwnerBtn"),
+  collabAddEditorBtn: document.getElementById("collabAddEditorBtn"),
+  collabAddViewerBtn: document.getElementById("collabAddViewerBtn"),
+  collabMembersCloseBtn: document.getElementById("collabMembersCloseBtn"),
   thumbList: document.getElementById("thumbList"),
   mainImage: document.getElementById("mainImage"),
   drawLayer: document.getElementById("drawLayer"),
@@ -265,15 +281,58 @@ async function collabFetch(path, options = {}) {
   return text ? JSON.parse(text) : {};
 }
 
+function roleLabel(role) {
+  const normalized = String(role || "viewer").toLowerCase();
+  if (normalized === "owner") return "管理者";
+  if (normalized === "editor") return "可编辑者";
+  return "仅读";
+}
+
+function getBookMetaById(bookId) {
+  if (!bookId) return null;
+  return loadBooksIndex().find((item) => item.id === bookId) || null;
+}
+
+function getCurrentBookRole() {
+  return String(getBookMetaById(currentBookId)?.role || "viewer").toLowerCase();
+}
+
+function canEditCurrentBook() {
+  const role = getCurrentBookRole();
+  return role === "owner" || role === "editor";
+}
+
+function canManageMembers(role) {
+  return String(role || "viewer").toLowerCase() === "owner";
+}
+
+function canInviteMembers(role) {
+  const normalized = String(role || "viewer").toLowerCase();
+  return normalized === "owner" || normalized === "editor";
+}
+
+function ensureCanEdit(actionName = "执行编辑操作") {
+  if (canEditCurrentBook()) return true;
+  alert(`你当前是仅读角色，不能${actionName}`);
+  return false;
+}
+
 function updateAuthUi() {
+  const currentRole = getCurrentBookRole();
   if (el.authUserLabel) {
+    const accountText = Number(collabState.user?.accountNo) > 0
+      ? ` #${Number(collabState.user.accountNo)}`
+      : "";
     el.authUserLabel.textContent = collabState.user
-      ? `协作用户：${collabState.user.displayName || collabState.user.email || "已登录"}`
+      ? `协作用户：${collabState.user.displayName || collabState.user.email || "已登录"}${accountText}${currentBookId ? `（${roleLabel(currentRole)}）` : ""}`
       : "";
   }
   if (el.authOpenBtn) el.authOpenBtn.classList.toggle("hidden", !!collabState.user);
   if (el.authLogoutBtn) el.authLogoutBtn.classList.toggle("hidden", !collabState.user);
-  if (el.shareBookBtn) el.shareBookBtn.classList.toggle("hidden", !collabState.user || !currentBookId);
+  if (el.shareBookBtn) {
+    el.shareBookBtn.classList.toggle("hidden", !collabState.user || !currentBookId || !canInviteMembers(currentRole));
+  }
+  syncEditorPermissionUi();
 }
 
 function showAuthModal() {
@@ -2746,6 +2805,7 @@ async function migrateLocalStorageBooksIfNeeded() {
 function saveState(options = {}) {
   if (!currentBookId) return Promise.resolve();
   if (!collabState.token) return Promise.resolve();
+  if (!canEditCurrentBook()) return Promise.resolve();
   const wait = !!options.wait;
   const payload = collectCurrentBookData();
   const nextTask = async () => {
@@ -2891,6 +2951,206 @@ async function deleteBookRecord(bookId) {
   }
 }
 
+function roleListElement(role) {
+  if (role === "owner") return el.collabRoleOwnerList;
+  if (role === "editor") return el.collabRoleEditorList;
+  return el.collabRoleViewerList;
+}
+
+function canAddForRole(bookRole, targetRole) {
+  const normalized = String(bookRole || "viewer").toLowerCase();
+  if (normalized === "owner") return true;
+  if (normalized === "editor") return targetRole === "viewer";
+  return false;
+}
+
+function canDragMember(bookRole, member) {
+  const normalized = String(bookRole || "viewer").toLowerCase();
+  return normalized === "owner" && !!member?.userId;
+}
+
+async function fetchBookMembers(bookId) {
+  if (!bookId) throw new Error("缺少书籍ID");
+  const data = await collabFetch(`/api/collab/books/${bookId}/members`);
+  const members = Array.isArray(data?.members) ? data.members : [];
+  const bookRole = String(data?.book?.role || getBookMetaById(bookId)?.role || "viewer").toLowerCase();
+  return { members, bookRole };
+}
+
+function renderCollabMembersModal() {
+  if (!el.collabMembersModal) return;
+  const { loading, members, bookRole, openBookId } = state.collabPanel;
+  const openBook = getBookMetaById(openBookId);
+
+  if (el.collabMembersTitle) {
+    el.collabMembersTitle.textContent = openBook
+      ? `协作成员 - ${openBook.name || "未命名书籍"}`
+      : "协作成员";
+  }
+  if (el.collabMembersHint) {
+    el.collabMembersHint.textContent = loading
+      ? "加载中..."
+      : `你的身份：${roleLabel(bookRole)}${canManageMembers(bookRole) ? "（可拖拽成员改变身份）" : ""}`;
+  }
+
+  ["owner", "editor", "viewer"].forEach((role) => {
+    const list = roleListElement(role);
+    if (!list) return;
+    list.innerHTML = "";
+    list.classList.toggle("droppable", canManageMembers(bookRole));
+    const listMembers = members.filter((item) => String(item.role || "viewer").toLowerCase() === role);
+    if (listMembers.length === 0 && !loading) {
+      const empty = document.createElement("div");
+      empty.className = "collab-role-empty";
+      empty.textContent = "暂无成员";
+      list.appendChild(empty);
+    }
+    listMembers.forEach((member) => {
+      const row = document.createElement("div");
+      row.className = "collab-member-item";
+      row.draggable = canDragMember(bookRole, member);
+      row.dataset.userId = member.userId;
+      row.dataset.role = String(member.role || "viewer").toLowerCase();
+      row.innerHTML = `
+        <div class="collab-member-name">${member.displayName || "(未设置昵称)"}</div>
+        <div class="collab-member-meta">账号 #${Number(member.accountNo || 0)} · ${member.email}</div>
+      `;
+      if (row.draggable) {
+        row.addEventListener("dragstart", (evt) => {
+          evt.dataTransfer?.setData("text/plain", JSON.stringify({ userId: member.userId, role: row.dataset.role }));
+          row.classList.add("dragging");
+        });
+        row.addEventListener("dragend", () => {
+          row.classList.remove("dragging");
+        });
+      }
+      list.appendChild(row);
+    });
+
+    if (canManageMembers(bookRole)) {
+      list.ondragover = (evt) => {
+        evt.preventDefault();
+        list.classList.add("drag-over");
+      };
+      list.ondragleave = () => list.classList.remove("drag-over");
+      list.ondrop = (evt) => {
+        evt.preventDefault();
+        list.classList.remove("drag-over");
+        const raw = evt.dataTransfer?.getData("text/plain") || "";
+        if (!raw) return;
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch (_) {
+          return;
+        }
+        if (!payload?.userId || !openBookId) return;
+        const targetRole = role;
+        if (String(payload.role || "") === targetRole) return;
+        updateBookMemberRole(openBookId, payload.userId, targetRole).catch((err) => {
+          alert(err?.message || "更新角色失败");
+        });
+      };
+    } else {
+      list.ondragover = null;
+      list.ondragleave = null;
+      list.ondrop = null;
+    }
+  });
+
+  if (el.collabAddOwnerBtn) el.collabAddOwnerBtn.disabled = !canAddForRole(bookRole, "owner");
+  if (el.collabAddEditorBtn) el.collabAddEditorBtn.disabled = !canAddForRole(bookRole, "editor");
+  if (el.collabAddViewerBtn) el.collabAddViewerBtn.disabled = !canAddForRole(bookRole, "viewer");
+}
+
+async function refreshCollabMembersModal() {
+  const bookId = state.collabPanel.openBookId;
+  if (!bookId) return;
+  state.collabPanel.loading = true;
+  renderCollabMembersModal();
+  try {
+    const data = await fetchBookMembers(bookId);
+    state.collabPanel.members = data.members;
+    state.collabPanel.bookRole = data.bookRole;
+    const meta = getBookMetaById(bookId);
+    if (meta && meta.role !== data.bookRole) {
+      const nextBooks = loadBooksIndex().map((item) => (
+        item.id === bookId ? { ...item, role: data.bookRole } : item
+      ));
+      saveBooksIndex(nextBooks);
+      renderBooksList();
+      updateAuthUi();
+    }
+  } finally {
+    state.collabPanel.loading = false;
+    renderCollabMembersModal();
+  }
+}
+
+async function openCollabMembersModal(book) {
+  if (!book?.id) return;
+  state.collabPanel.openBookId = book.id;
+  state.collabPanel.members = [];
+  state.collabPanel.bookRole = String(book.role || "viewer").toLowerCase();
+  state.collabPanel.loading = true;
+  renderCollabMembersModal();
+  if (el.collabMembersModal) {
+    el.collabMembersModal.classList.remove("hidden");
+  }
+  await refreshCollabMembersModal();
+}
+
+function closeCollabMembersModal() {
+  if (el.collabMembersModal) {
+    el.collabMembersModal.classList.add("hidden");
+  }
+  state.collabPanel.openBookId = "";
+  state.collabPanel.members = [];
+  state.collabPanel.loading = false;
+}
+
+async function inviteBookMember(targetRole) {
+  const bookId = state.collabPanel.openBookId;
+  if (!bookId) return;
+  const currentRole = String(state.collabPanel.bookRole || "viewer").toLowerCase();
+  if (!canAddForRole(currentRole, targetRole)) {
+    alert("你当前没有该邀请权限");
+    return;
+  }
+  const targetInput = window.prompt("输入对方数字账号（推荐）或昵称/邮箱");
+  if (targetInput == null) return;
+  const normalized = String(targetInput || "").trim();
+  if (!normalized) {
+    alert("输入不能为空");
+    return;
+  }
+
+  const body = { role: targetRole };
+  if (/^\d+$/.test(normalized)) {
+    body.accountNo = Number(normalized);
+  } else if (normalized.includes("@")) {
+    body.email = normalized;
+  } else {
+    body.nickname = normalized;
+  }
+
+  await collabFetch(`/api/collab/books/${bookId}/share`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  await refreshCollabMembersModal();
+}
+
+async function updateBookMemberRole(bookId, userId, role) {
+  await collabFetch(`/api/collab/books/${bookId}/members/${userId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role })
+  });
+  await refreshCollabMembersModal();
+}
+
 function renderBooksList() {
   if (!el.booksList) return;
   const books = loadBooksIndex();
@@ -2904,11 +3164,36 @@ function renderBooksList() {
   }
 
   books.forEach((book) => {
+    const bookRole = String(book.role || "viewer").toLowerCase();
+    const canRename = bookRole === "owner" || bookRole === "editor";
+    const canDelete = bookRole === "owner";
     const card = document.createElement("div");
     card.className = "book-card";
+    const head = document.createElement("div");
+    head.className = "book-card-head";
     const title = document.createElement("div");
     title.className = "book-card-title";
     title.textContent = book.name || "未命名书籍";
+    const roleBadge = document.createElement("span");
+    roleBadge.className = `book-role-badge role-${bookRole}`;
+    roleBadge.textContent = roleLabel(bookRole);
+
+    const collabBtn = document.createElement("button");
+    collabBtn.type = "button";
+    collabBtn.className = "mini-btn collab-manage-btn";
+    collabBtn.textContent = "协作";
+    collabBtn.title = "查看与管理协作成员";
+    collabBtn.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      openCollabMembersModal(book).catch((err) => {
+        alert(err?.message || "打开协作面板失败");
+      });
+    });
+
+    head.appendChild(title);
+    head.appendChild(roleBadge);
+    head.appendChild(collabBtn);
+
     const meta = document.createElement("div");
     meta.className = "book-card-meta";
     meta.textContent = `图片 ${book.imageCount || 0} 张 · 更新于 ${new Date(book.updatedAt || book.createdAt || Date.now()).toLocaleString()}`;
@@ -2930,7 +3215,12 @@ function renderBooksList() {
     renameBtn.type = "button";
     renameBtn.className = "mini-btn";
     renameBtn.textContent = "重命名";
+    renameBtn.disabled = !canRename;
     renameBtn.addEventListener("click", async () => {
+      if (!canRename) {
+        alert("你当前没有重命名权限");
+        return;
+      }
       const nextName = window.prompt("输入新的书籍名称", book.name || "");
       if (nextName == null) return;
       try {
@@ -2945,7 +3235,12 @@ function renderBooksList() {
     deleteBtn.type = "button";
     deleteBtn.className = "mini-btn book-delete-btn";
     deleteBtn.textContent = "删除";
+    deleteBtn.disabled = !canDelete;
     deleteBtn.addEventListener("click", async () => {
+      if (!canDelete) {
+        alert("仅管理者可删除书籍");
+        return;
+      }
       const ok = window.confirm(`确定删除书籍“${book.name || "未命名书籍"}”吗？删除后不可恢复。`);
       if (!ok) return;
       try {
@@ -2961,7 +3256,7 @@ function renderBooksList() {
     actions.appendChild(renameBtn);
     actions.appendChild(deleteBtn);
 
-    card.appendChild(title);
+    card.appendChild(head);
     card.appendChild(meta);
     card.appendChild(enterBtn);
     card.appendChild(actions);
@@ -3019,11 +3314,12 @@ async function loadState() {
 
 function renderThumbs() {
   el.thumbList.innerHTML = "";
+  const editable = canEditCurrentBook();
   const selectedForDelete = new Set(state.batchDeleteImageIds);
   state.images.forEach((img) => {
     const card = document.createElement("div");
     card.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""}`;
-    card.draggable = true;
+    card.draggable = editable;
     card.dataset.imageId = img.id;
     card.innerHTML = `
       <div class="thumb-head">
@@ -3035,6 +3331,7 @@ function renderThumbs() {
     `;
 
     card.addEventListener("dragstart", (evt) => {
+      if (!editable) return;
       state.draggingThumbId = img.id;
       card.classList.add("dragging");
       if (evt.dataTransfer) {
@@ -3061,6 +3358,7 @@ function renderThumbs() {
     });
 
     card.addEventListener("drop", (evt) => {
+      if (!editable) return;
       evt.preventDefault();
       card.classList.remove("drag-over");
       const draggedId = state.draggingThumbId || (evt.dataTransfer ? evt.dataTransfer.getData("text/plain") : "");
@@ -3085,6 +3383,7 @@ function renderThumbs() {
     });
 
     const selectCheckbox = card.querySelector(`input[data-select-id="${img.id}"]`);
+    selectCheckbox.disabled = !editable;
     selectCheckbox.addEventListener("click", (evt) => {
       evt.stopPropagation();
     });
@@ -3140,6 +3439,7 @@ function renderMainImage() {
 }
 
 function startRenameSelectedImage() {
+  if (!ensureCanEdit("重命名图片")) return;
   const img = selectedImage();
   if (!img) {
     alert("请先选择图片");
@@ -3155,6 +3455,7 @@ function startRenameSelectedImage() {
 }
 
 function confirmRenameSelectedImage() {
+  if (!ensureCanEdit("重命名图片")) return;
   const img = selectedImage();
   if (!img) return;
 
@@ -3184,6 +3485,7 @@ function renderBoxes() {
   const img = selectedImage();
   el.drawLayer.innerHTML = "";
   if (!img) return;
+  const editable = canEditCurrentBook();
   const parentMap = getParentMap(img);
 
   img.annotations.forEach((anno) => {
@@ -3211,7 +3513,7 @@ function renderBoxes() {
       if (picked) state.selectedAnnoId = picked.id;
       renderAll();
     });
-    if (anno.id === state.selectedAnnoId) {
+    if (editable && anno.id === state.selectedAnnoId) {
       ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
         const handle = document.createElement("span");
         handle.className = `box-resize-handle handle-${dir}`;
@@ -3409,6 +3711,12 @@ function renderPropsEditor() {
 }
 
 function renderEditMode() {
+  if (!canEditCurrentBook()) {
+    el.drawState.textContent = "当前为仅读权限，可查看方框与标签，不能编辑";
+    el.startDrawBtn.textContent = "开始添加";
+    setDrawTextFieldsVisible(false);
+    return;
+  }
   setDrawTextFieldsVisible(drawTextFieldsEnabled());
   if (state.drawingActive) {
     const count = state.pendingDrafts.length;
@@ -3693,6 +4001,64 @@ function renderAll() {
   renderMainPanelTabs();
   renderRightPanelTabs();
   renderGlyphPanel();
+  syncEditorPermissionUi();
+}
+
+function syncEditorPermissionUi() {
+  const editable = canEditCurrentBook();
+  const disableWhenReadOnly = [
+    el.uploadBtn,
+    el.deleteSelectedImagesBtn,
+    el.renameImageBtn,
+    el.startDrawBtn,
+    el.clearDraftBtn,
+    el.saveAnnoBtn,
+    el.saveCurrentPropsBtn,
+    el.createDraftTagBtn,
+    el.glyphStartCreateBtn,
+    el.glyphReselectBtn,
+    el.glyphAssignSaveBtn,
+    el.autoDrawByAiBtn,
+    el.annoAutoSuggestBtn,
+    el.propMeaningAutoTranslateBtn,
+    el.tagMoveUpBtn,
+    el.tagMoveDownBtn,
+    el.deleteTagBtn,
+    el.addAttrBtn,
+    el.deleteAttrBtn
+  ];
+
+  disableWhenReadOnly.forEach((node) => {
+    if (node) node.disabled = !editable;
+  });
+
+  [
+    el.viewerTitleInput,
+    el.annoTranscription,
+    el.annoMeaning,
+    el.propNote,
+    el.propMeaning,
+    el.draftTagName,
+    el.draftTagParent,
+    el.draftTagAttrs,
+    el.templateTagSelect,
+    el.newAttrForTemplateTag,
+    el.annoShapeSelect,
+    el.annoColor
+  ].forEach((node) => {
+    if (node) node.disabled = !editable;
+  });
+
+  if (!editable) {
+    state.drawingActive = false;
+    state.glyphCreateActive = false;
+    state.draftRect = null;
+    state.pendingDrafts = [];
+  }
+
+  if (el.drawLayer) {
+    el.drawLayer.classList.toggle("readonly-layer", !editable);
+  }
 }
 
 function bindDrawEvents() {
@@ -3711,10 +4077,11 @@ function bindDrawEvents() {
   el.drawLayer.addEventListener("mousedown", (evt) => {
     const img = selectedImage();
     if (!img) return;
+    const editable = canEditCurrentBook();
     const rect = el.drawLayer.getBoundingClientRect();
     const x = clamp01((evt.clientX - rect.left) / rect.width);
     const y = clamp01((evt.clientY - rect.top) / rect.height);
-    const allowAdjustExisting = !state.glyphCreateActive && (!state.drawingActive || evt.altKey);
+    const allowAdjustExisting = editable && !state.glyphCreateActive && (!state.drawingActive || evt.altKey);
 
     if (allowAdjustExisting) {
       if (evt.target instanceof Element && evt.target.closest(".box-delete")) return;
@@ -3752,6 +4119,15 @@ function bindDrawEvents() {
       if (!state.drawingActive) {
         return;
       }
+    }
+
+    if (!editable) {
+      const picked = pickTopAnnoAtPoint(img, x, y);
+      if (picked) {
+        state.selectedAnnoId = picked.id;
+        renderAll();
+      }
+      return;
     }
 
     if (state.glyphCreateActive) {
@@ -4106,24 +4482,55 @@ function bindEvents() {
         alert("请先登录协作账号");
         return;
       }
-      const email = window.prompt("输入协作用户邮箱");
-      if (email == null) return;
-      const roleRaw = window.prompt("输入角色 viewer 或 editor", "editor");
-      if (roleRaw == null) return;
-      const role = String(roleRaw || "").trim().toLowerCase();
-      if (role !== "viewer" && role !== "editor") {
-        alert("角色仅支持 viewer 或 editor");
-        return;
-      }
       try {
-        await collabFetch(`/api/collab/books/${currentBookId}/share`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: String(email || "").trim(), role })
-        });
-        alert("共享成功");
+        const meta = getBookMetaById(currentBookId);
+        await openCollabMembersModal(meta || { id: currentBookId, name: "当前书籍", role: getCurrentBookRole() });
       } catch (err) {
-        alert(err?.message || "共享失败");
+        alert(err?.message || "打开协作面板失败");
+      }
+    });
+  }
+
+  if (el.collabMembersCloseBtn) {
+    el.collabMembersCloseBtn.addEventListener("click", () => {
+      closeCollabMembersModal();
+    });
+  }
+
+  if (el.collabMembersModal) {
+    el.collabMembersModal.addEventListener("click", (evt) => {
+      if (evt.target === el.collabMembersModal) {
+        closeCollabMembersModal();
+      }
+    });
+  }
+
+  if (el.collabAddOwnerBtn) {
+    el.collabAddOwnerBtn.addEventListener("click", async () => {
+      try {
+        await inviteBookMember("owner");
+      } catch (err) {
+        alert(err?.message || "邀请失败");
+      }
+    });
+  }
+
+  if (el.collabAddEditorBtn) {
+    el.collabAddEditorBtn.addEventListener("click", async () => {
+      try {
+        await inviteBookMember("editor");
+      } catch (err) {
+        alert(err?.message || "邀请失败");
+      }
+    });
+  }
+
+  if (el.collabAddViewerBtn) {
+    el.collabAddViewerBtn.addEventListener("click", async () => {
+      try {
+        await inviteBookMember("viewer");
+      } catch (err) {
+        alert(err?.message || "邀请失败");
       }
     });
   }
@@ -4194,6 +4601,7 @@ function bindEvents() {
     if (evt.key === "Escape") {
       closeExportFormatModal();
       closeXmlHintsModal();
+      closeCollabMembersModal();
     }
   });
 
@@ -4260,6 +4668,10 @@ function bindEvents() {
   function bindUploadInput(inputEl) {
     if (!inputEl) return;
     inputEl.addEventListener("change", (evt) => {
+      if (!ensureCanEdit("上传图片")) {
+        evt.target.value = "";
+        return;
+      }
       const file = evt.target.files?.[0];
       if (!file) return;
       Promise.resolve()
@@ -4291,6 +4703,7 @@ function bindEvents() {
   }
 
   el.startDrawBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("新增方框")) return;
     const activeTag = findTemplateTag(state.activeDraftTagId);
     const activeStyle = activeTag ? getTagStyle(activeTag) : null;
     if (!state.drawingActive && !state.glyphCreateActive && (!activeStyle || !activeStyle.color)) {
@@ -4306,6 +4719,7 @@ function bindEvents() {
 
   if (el.glyphStartCreateBtn) {
     el.glyphStartCreateBtn.addEventListener("click", () => {
+      if (!ensureCanEdit("开始造字")) return;
       state.activeMainPanel = "glyph";
       if (state.glyphCreateActive) {
         state.glyphCreateActive = false;
@@ -4330,6 +4744,7 @@ function bindEvents() {
 
   if (el.glyphReselectBtn) {
     el.glyphReselectBtn.addEventListener("click", () => {
+      if (!ensureCanEdit("重新框选")) return;
       state.activeMainPanel = "glyph";
       state.drawingActive = false;
       state.pendingDrafts = [];
@@ -4368,6 +4783,7 @@ function bindEvents() {
 
   if (el.glyphAssignSaveBtn) {
     el.glyphAssignSaveBtn.addEventListener("click", async () => {
+      if (!ensureCanEdit("保存造字")) return;
       const original = el.glyphAssignSaveBtn.textContent;
       el.glyphAssignSaveBtn.disabled = true;
       el.glyphAssignSaveBtn.textContent = "保存中...";
@@ -4445,6 +4861,7 @@ function bindEvents() {
   }
 
   el.deleteSelectedImagesBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("删除图片")) return;
     const selectedIds = new Set(state.batchDeleteImageIds);
     if (selectedIds.size === 0) {
       alert("请先勾选要删除的图片");
@@ -4468,6 +4885,7 @@ function bindEvents() {
   });
 
   el.clearDraftBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("清空草稿")) return;
     state.draftRect = null;
     state.pendingDrafts = [];
     state.drawingActive = false;
@@ -4477,6 +4895,7 @@ function bindEvents() {
   });
 
   el.annoColor.addEventListener("input", () => {
+    if (!canEditCurrentBook()) return;
     renderColorPreview(el.annoColor.value);
     if (!state.activeDraftTagId) return;
     syncStyleToTag(state.activeDraftTagId, el.annoShapeSelect.value, el.annoColor.value);
@@ -4489,6 +4908,7 @@ function bindEvents() {
   });
 
   el.annoShapeSelect.addEventListener("change", () => {
+    if (!canEditCurrentBook()) return;
     if (!state.activeDraftTagId) return;
     syncStyleToTag(state.activeDraftTagId, el.annoShapeSelect.value, el.annoColor.value);
     renderBoxes();
@@ -4496,6 +4916,7 @@ function bindEvents() {
   });
 
   el.createDraftTagBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("新增标签")) return;
     const name = el.draftTagName.value.trim();
     const parentId = el.draftTagParent.value || null;
     const attrs = el.draftTagAttrs.value.trim();
@@ -4515,6 +4936,7 @@ function bindEvents() {
   });
 
   el.saveAnnoBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("保存标注")) return;
     const img = selectedImage();
     if (!img) return;
     if (state.pendingDrafts.length === 0) { alert("请先画至少一个框"); return; }
@@ -4545,6 +4967,7 @@ function bindEvents() {
   });
 
   el.saveCurrentPropsBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("保存属性")) return;
     const img = selectedImage();
     if (!img) return;
     const anno = selectedAnno();
@@ -4585,12 +5008,14 @@ function bindEvents() {
   });
 
   el.templateTagSelect.addEventListener("change", () => {
+    if (!canEditCurrentBook()) return;
     state.selectedTemplateTagId = el.templateTagSelect.value;
     renderTemplateAttrSelect();
     saveState();
   });
 
   el.addAttrBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("新增模板属性")) return;
     const tag = findTemplateTag(state.selectedTemplateTagId);
     const attr = el.newAttrForTemplateTag.value.trim();
     if (!tag || !attr) return;
@@ -4604,6 +5029,7 @@ function bindEvents() {
   });
 
   el.deleteAttrBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("删除模板属性")) return;
     const tag = findTemplateTag(state.selectedTemplateTagId);
     const attr = el.templateAttrSelect.value;
     if (!tag || !attr) return;
@@ -4613,6 +5039,7 @@ function bindEvents() {
   });
 
   el.deleteTagBtn.addEventListener("click", () => {
+    if (!ensureCanEdit("删除模板标签")) return;
     const tag = findTemplateTag(state.selectedTemplateTagId);
     if (!tag) return;
     if (!window.confirm(`确定删除模板标签 ${tag.name} 及其子标签？`)) return;
@@ -4627,6 +5054,7 @@ function bindEvents() {
   });
 
   function swapSibling(tagId, direction) {
+    if (!canEditCurrentBook()) return;
     const tag = findTemplateTag(tagId);
     if (!tag) return;
     const siblings = templateChildren(tag.parentId);

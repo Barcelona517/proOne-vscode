@@ -160,6 +160,7 @@ app.post("/api/auth/login", requireCollab, async (req, res) => {
     }
     const profile = {
       id: user.id,
+      accountNo: Number(user.accountNo || 0),
       email: user.email,
       displayName: user.displayName,
       createdAt: user.createdAt
@@ -259,20 +260,64 @@ app.delete("/api/collab/books/:id", requireCollab, requireAuth, async (req, res)
 app.post("/api/collab/books/:id/share", requireCollab, requireAuth, async (req, res) => {
   try {
     const email = String(req.body?.email || "").trim().toLowerCase();
+    const nickname = String(req.body?.nickname || "").trim();
+    const accountNo = Number(req.body?.accountNo);
     const role = String(req.body?.role || "viewer").trim().toLowerCase();
-    if (!email) {
-      res.status(400).json({ error: "email 不能为空" });
+    const hasAccountNo = Number.isInteger(accountNo) && accountNo > 0;
+    if (!email && !nickname && !hasAccountNo) {
+      res.status(400).json({ error: "email、nickname 或 accountNo 不能为空" });
       return;
     }
-    const result = await collabStore.shareBook({
-      bookId: req.params.id,
-      actorUserId: req.user.id,
-      targetEmail: email,
-      role
-    });
+    const result = hasAccountNo
+      ? await collabStore.shareBookByAccountNo({
+        bookId: req.params.id,
+        actorUserId: req.user.id,
+        targetAccountNo: accountNo,
+        role
+      })
+      : nickname
+        ? await collabStore.shareBookByNickname({
+        bookId: req.params.id,
+        actorUserId: req.user.id,
+        targetNickname: nickname,
+        role
+      })
+        : await collabStore.shareBook({
+          bookId: req.params.id,
+          actorUserId: req.user.id,
+          targetEmail: email,
+          role
+        });
     res.json({ shared: result });
   } catch (err) {
     res.status(400).json({ error: err?.message || "共享失败" });
+  }
+});
+
+app.get("/api/collab/books/:id/members", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const result = await collabStore.listBookMembers({
+      bookId: req.params.id,
+      userId: req.user.id
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "查询成员失败" });
+  }
+});
+
+app.patch("/api/collab/books/:id/members/:userId", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const role = String(req.body?.role || "").trim().toLowerCase();
+    const result = await collabStore.updateBookMemberRole({
+      bookId: req.params.id,
+      actorUserId: req.user.id,
+      targetUserId: req.params.userId,
+      role
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "更新成员角色失败" });
   }
 });
 
