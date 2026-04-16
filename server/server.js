@@ -555,12 +555,17 @@ app.post("/api/layout/suggest", async (req, res) => {
   try {
     const imageDataUrl = String(req.body?.imageDataUrl || "");
     const categoriesRaw = Array.isArray(req.body?.categories) ? req.body.categories : [];
+    const xmlHintLinesRaw = Array.isArray(req.body?.xmlHintLines) ? req.body.xmlHintLines : [];
     const categories = categoriesRaw
       .map((item) => ({
         name: String(item?.name || "").trim(),
         path: String(item?.path || "").trim()
       }))
       .filter((item) => item.name);
+    const xmlHintLines = xmlHintLinesRaw
+      .map((line) => String(line || "").trim())
+      .filter(Boolean)
+      .slice(0, 12);
 
     if (!imageDataUrl) {
       res.status(400).send("缺少 imageDataUrl");
@@ -597,6 +602,14 @@ app.post("/api/layout/suggest", async (req, res) => {
       "3) 只返回明显区域，不要输出太碎的小块；",
       "4) 无法识别时返回 detections 空数组。"
     ];
+
+    if (xmlHintLines.length > 0) {
+      promptLines.push(
+        "以下是用户投喂的 XML 标签示例（代表其标注习惯），请优先按这些路径和标签名称做判断：",
+        ...xmlHintLines,
+        "若示例与图片冲突，以图片实际内容为准，但标签命名尽量贴合示例。"
+      );
+    }
 
     if (sentenceMode) {
       promptLines.push(

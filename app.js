@@ -94,7 +94,9 @@ const state = {
   activeRightPanel: "object",
   glyphDraft: null,
   glyphRegistry: [],
+  aiLayoutHints: { examples: [], activeFileNames: [], cachedPromptLines: [], updatedAt: "" },
   propInputs: {},
+  objectStyleInputs: {},
   draggingThumbId: null,
   batchDeleteImageIds: [],
   renamingImage: false
@@ -174,6 +176,13 @@ const el = {
   addDraftTagToTemplate: document.getElementById("addDraftTagToTemplate"),
   createDraftTagBtn: document.getElementById("createDraftTagBtn"),
   autoDrawByAiBtn: document.getElementById("autoDrawByAiBtn"),
+  feedXmlHintsBtn: document.getElementById("feedXmlHintsBtn"),
+  feedXmlHintsInput: document.getElementById("feedXmlHintsInput"),
+  feedXmlHintsInfo: document.getElementById("feedXmlHintsInfo"),
+  xmlHintsModal: document.getElementById("xmlHintsModal"),
+  xmlHintsList: document.getElementById("xmlHintsList"),
+  xmlHintsCloseBtn: document.getElementById("xmlHintsCloseBtn"),
+  xmlHintsAddBtn: document.getElementById("xmlHintsAddBtn"),
   annoTranscriptionRow: document.getElementById("annoTranscriptionRow"),
   annoTranscription: document.getElementById("annoTranscription"),
   annoMeaningRow: document.getElementById("annoMeaningRow"),
@@ -639,12 +648,24 @@ function normalizeRect(rect) {
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
 
-function toShapeRect(base, shape) {
-  const rect = { ...base };
-  if (shape === "line" || shape === "wave") {
-    rect.h = Math.max(rect.h, 0.006);
-  }
-  return rect;
+function normalizeAnnoShape(_shape) {
+  return "rect";
+}
+
+function normalizeAnnoBorderStyle(style) {
+  const normalized = String(style || "").trim().toLowerCase();
+  if (normalized === "dashed" || normalized === "dotted") return normalized;
+  return "solid";
+}
+
+function normalizeAnnoBorderWidth(width) {
+  const n = Number.parseInt(width, 10);
+  if (!Number.isFinite(n)) return 2;
+  return Math.max(1, Math.min(8, n));
+}
+
+function toShapeRect(base, _shape) {
+  return { ...base };
 }
 
 function hexToRgba(hex, alpha) {
@@ -655,6 +676,15 @@ function hexToRgba(hex, alpha) {
   const g = (intVal >> 8) & 255;
   const b = intVal & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function applyBoxVisualStyle(box, color, borderStyle, borderWidth, isDraft = false) {
+  const safeColor = String(color || "#2e6f86");
+  const safeBorderStyle = normalizeAnnoBorderStyle(borderStyle || (isDraft ? "dashed" : "solid"));
+  const safeBorderWidth = normalizeAnnoBorderWidth(borderWidth);
+  box.style.border = `${safeBorderWidth}px ${safeBorderStyle} ${safeColor}`;
+  box.style.borderColor = safeColor;
+  box.style.background = hexToRgba(safeColor, isDraft ? 0.12 : 0.18);
 }
 
 function findTemplateTag(id) { return state.templateTags.find((tag) => tag.id === id) || null; }
@@ -698,11 +728,15 @@ function ensureImageMeta(img, idx) {
     anno.attrs = anno.attrs || {};
     const tag = findTemplateTag(anno.tagId);
     if (tag && tag.style) {
-      anno.shape = tag.style.shape;
+      anno.shape = normalizeAnnoShape(tag.style.shape);
       anno.color = tag.style.color;
+      anno.borderStyle = normalizeAnnoBorderStyle(tag.style.borderStyle || "solid");
+      anno.borderWidth = normalizeAnnoBorderWidth(tag.style.borderWidth || 2);
     }
     anno.color = anno.color || "#2e6f86";
-    anno.shape = anno.shape || "rect";
+    anno.shape = normalizeAnnoShape(anno.shape);
+    anno.borderStyle = normalizeAnnoBorderStyle(anno.borderStyle);
+    anno.borderWidth = normalizeAnnoBorderWidth(anno.borderWidth);
     anno.id = anno.id || `anno_${index + 1}`;
     anno.transcription = anno.transcription || "";
     anno.parentAnnoId = anno.parentAnnoId || null;
@@ -732,6 +766,261 @@ function timestampForFileName() {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+function buildAiLayoutHintPromptLines(hints) {
+  const lines = [];
+  const examples = Array.isArray(hints?.examples) ? hints.examples : [];
+  const enabledExamples = examples.filter((item) => item.enabled);
+  enabledExamples.forEach((item, idx) => {
+    const summaryText = String(item.summaryText || "").trim();
+    if (summaryText) {
+      lines.push(`${idx + 1}. 文件=${item.fileName}; 说明摘要=${summaryText.slice(0, 500)}`);
+      return;
+    }
+    const tags = item.tags.length > 0 ? item.tags.join(",") : "(无)";
+    const paths = item.paths.length > 0 ? item.paths.slice(0, 10).join(" | ") : "(无)";
+    lines.push(`${idx + 1}. 文件=${item.fileName}; 标签=${tags}; 路径样例=${paths}`);
+  });
+
+  return lines.slice(0, 12);
+}
+
+function normalizeAiLayoutHints(raw) {
+  const activeFileNamesRaw = Array.isArray(raw?.activeFileNames)
+    ? raw.activeFileNames.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  const activeSet = new Set(activeFileNamesRaw);
+  const examplesRaw = Array.isArray(raw?.examples) ? raw.examples : [];
+  const examples = examplesRaw
+    .map((item) => ({
+      fileName: String(item?.fileName || "").trim(),
+      fileType: String(item?.fileType || "").trim() || "text",
+      tags: Array.isArray(item?.tags) ? item.tags.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 24) : [],
+      paths: Array.isArray(item?.paths) ? item.paths.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 24) : [],
+      summaryText: String(item?.summaryText || "").trim().slice(0, 2000),
+      enabled: activeSet.size === 0 ? true : activeSet.has(String(item?.fileName || "").trim())
+    }))
+    .filter((item) => item.fileName && (item.tags.length > 0 || item.paths.length > 0 || item.summaryText))
+    .slice(-10);
+  const activeFileNames = examples.filter((item) => item.enabled).map((item) => item.fileName);
+  const cachedPromptLines = buildAiLayoutHintPromptLines({ examples });
+  return {
+    examples,
+    activeFileNames,
+    cachedPromptLines,
+    updatedAt: String(raw?.updatedAt || "")
+  };
+}
+
+function stripXmlTags(text) {
+  return String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function extractDocxText(file) {
+  if (!window.JSZip) {
+    throw new Error("缺少 docx 解析依赖，请刷新页面后重试");
+  }
+  const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+  const entry = zip.file("word/document.xml");
+  if (!entry) return "";
+  const xml = await entry.async("string");
+  return stripXmlTags(xml);
+}
+
+async function extractHintFromFile(file) {
+  const fileName = String(file?.name || "").trim() || `example_${Date.now()}`;
+  const lowerName = fileName.toLowerCase();
+  const typeText = String(file?.type || "").toLowerCase();
+  const isDocx = lowerName.endsWith(".docx") || typeText.includes("wordprocessingml");
+  const isDoc = lowerName.endsWith(".doc") || typeText.includes("msword");
+  const isXml = lowerName.endsWith(".xml") || /(text|application)\/xml|\+xml/.test(typeText);
+
+  if (isDocx) {
+    let plainText = await extractDocxText(file);
+    plainText = String(plainText || "").replace(/\s+/g, " ").trim();
+    if (!plainText) {
+      throw new Error(`${fileName} 解析为空，请确认文档中有正文内容`);
+    }
+    return {
+      fileName,
+      fileType: "docx",
+      tags: [],
+      paths: [],
+      summaryText: plainText.slice(0, 1600),
+      enabled: true
+    };
+  }
+
+  if (isDoc) {
+    throw new Error(`${fileName} 为 .doc 旧格式，请先另存为 .docx 再上传`);
+  }
+
+  if (isXml) {
+    const text = await file.text();
+    const xmlHint = extractXmlHintFromText(text, fileName);
+    const summaryText = [
+      xmlHint.tags.length ? `标签: ${xmlHint.tags.join(",")}` : "",
+      xmlHint.paths.length ? `路径样例: ${xmlHint.paths.slice(0, 12).join(" | ")}` : ""
+    ].filter(Boolean).join("; ");
+    return {
+      ...xmlHint,
+      fileType: "xml",
+      summaryText
+    };
+  }
+
+  let plainText = "";
+  try {
+    plainText = await file.text();
+  } catch (_) {
+    plainText = "";
+  }
+
+  plainText = String(plainText || "").replace(/\s+/g, " ").trim();
+  if (!plainText) {
+    throw new Error(`${fileName} 无法提取可读文本，请优先使用 .docx/.txt/.md/.xml`);
+  }
+
+  const short = plainText.slice(0, 1600);
+  return {
+    fileName,
+    fileType: isDocx ? "docx" : "text",
+    tags: [],
+    paths: [],
+    summaryText: short,
+    enabled: true
+  };
+}
+
+function extractXmlHintFromText(xmlText, fileName) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, "application/xml");
+  const parseErr = doc.querySelector("parsererror");
+  if (parseErr) {
+    throw new Error(`XML 解析失败: ${fileName}`);
+  }
+
+  const tagSet = new Set();
+  doc.querySelectorAll("template tag").forEach((node) => {
+    const name = String(node.getAttribute("name") || "").trim();
+    if (name) tagSet.add(name);
+  });
+
+  const pathSet = new Set();
+  doc.querySelectorAll("annotations annotation").forEach((node) => {
+    const pathVal = String(node.getAttribute("tagPath") || "").trim();
+    const nameVal = String(node.getAttribute("tagName") || "").trim();
+    if (pathVal) pathSet.add(pathVal);
+    else if (nameVal) pathSet.add(nameVal);
+  });
+
+  return {
+    fileName,
+    tags: Array.from(tagSet).slice(0, 24),
+    paths: Array.from(pathSet).slice(0, 24)
+  };
+}
+
+async function ingestXmlHintFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (files.length === 0) {
+    throw new Error("请先选择示例文件");
+  }
+
+  const current = normalizeAiLayoutHints(state.aiLayoutHints);
+  const mapByName = new Map(current.examples.map((item) => [item.fileName, item]));
+  const enabledSet = new Set(current.activeFileNames);
+  for (const file of files) {
+    const hint = await extractHintFromFile(file);
+    mapByName.set(hint.fileName, { ...hint, enabled: true });
+    enabledSet.add(hint.fileName);
+  }
+  state.aiLayoutHints = {
+    examples: Array.from(mapByName.values()).slice(-10),
+    activeFileNames: Array.from(enabledSet).slice(-10),
+    updatedAt: new Date().toISOString()
+  };
+  state.aiLayoutHints = normalizeAiLayoutHints(state.aiLayoutHints);
+}
+
+function buildXmlHintLinesForPrompt() {
+  const hints = normalizeAiLayoutHints(state.aiLayoutHints);
+  state.aiLayoutHints = hints;
+  return Array.isArray(hints.cachedPromptLines) ? hints.cachedPromptLines.slice(0, 12) : [];
+}
+
+function renderXmlHintInfo() {
+  if (!el.feedXmlHintsInfo) return;
+  const hints = normalizeAiLayoutHints(state.aiLayoutHints);
+  const total = hints.examples.length;
+  const enabled = hints.activeFileNames.length;
+  el.feedXmlHintsInfo.textContent = total > 0 ? `已启用 ${enabled}/${total}` : "未投喂示例";
+}
+
+function renderXmlHintsModalList() {
+  if (!el.xmlHintsList) return;
+  const hints = normalizeAiLayoutHints(state.aiLayoutHints);
+  state.aiLayoutHints = hints;
+  el.xmlHintsList.innerHTML = "";
+
+  if (hints.examples.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "xml-hints-empty";
+    empty.textContent = "还没有示例文件，请点击右下角“添加示例”。";
+    el.xmlHintsList.appendChild(empty);
+    return;
+  }
+
+  hints.examples.forEach((item, idx) => {
+    const row = document.createElement("div");
+    row.className = "xml-hints-item";
+
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(item.enabled);
+    checkbox.addEventListener("change", () => {
+      const current = normalizeAiLayoutHints(state.aiLayoutHints);
+      const target = current.examples.find((x) => x.fileName === item.fileName);
+      if (!target) return;
+      target.enabled = checkbox.checked;
+      current.activeFileNames = current.examples.filter((x) => x.enabled).map((x) => x.fileName);
+      state.aiLayoutHints = normalizeAiLayoutHints(current);
+      renderXmlHintInfo();
+      saveState();
+    });
+    label.appendChild(checkbox);
+
+    const title = document.createElement("span");
+    title.textContent = `${idx + 1}. ${item.fileName}`;
+    label.appendChild(title);
+    row.appendChild(label);
+
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    const tagsText = item.tags.length > 0 ? `标签: ${item.tags.slice(0, 6).join(",")}` : "";
+    const summaryText = item.summaryText ? `说明摘要: ${item.summaryText.slice(0, 120)}` : "";
+    const typeText = item.fileType ? `类型: ${item.fileType}` : "";
+    meta.textContent = [typeText, tagsText, summaryText].filter(Boolean).join(" | ");
+    row.appendChild(meta);
+
+    el.xmlHintsList.appendChild(row);
+  });
+}
+
+function openXmlHintsModal() {
+  if (!el.xmlHintsModal) return;
+  renderXmlHintsModalList();
+  el.xmlHintsModal.classList.remove("hidden");
+}
+
+function closeXmlHintsModal() {
+  if (!el.xmlHintsModal) return;
+  el.xmlHintsModal.classList.add("hidden");
 }
 
 function glyphCollectedLabel(item) {
@@ -847,6 +1136,7 @@ function markGlyphAsCollectedByIndex(index) {
 function buildTemplateXml(lines, parentId, indent) {
   const children = templateChildren(parentId);
   children.forEach((tag) => {
+    const tagStyle = getTagStyle(tag);
     const tagAttrs = [
       `id="${escapeXml(tag.id || "")}"`,
       `name="${escapeXml(tag.name || "")}"`,
@@ -855,8 +1145,8 @@ function buildTemplateXml(lines, parentId, indent) {
     if (tag.parentId) tagAttrs.push(`parentId="${escapeXml(tag.parentId)}"`);
     const attrsText = (tag.attrs || []).join(",");
     if (attrsText) tagAttrs.push(`attrs="${escapeXml(attrsText)}"`);
-    if (tag.style?.shape) tagAttrs.push(`shape="${escapeXml(tag.style.shape)}"`);
-    if (tag.style?.color) tagAttrs.push(`color="${escapeXml(tag.style.color)}"`);
+    if (tagStyle?.shape) tagAttrs.push(`shape="${escapeXml(tagStyle.shape)}"`);
+    if (tagStyle?.color) tagAttrs.push(`color="${escapeXml(tagStyle.color)}"`);
 
     lines.push(`${indent}<tag ${tagAttrs.join(" ")}>`);
     buildTemplateXml(lines, tag.id, `${indent}  `);
@@ -905,8 +1195,10 @@ function buildProjectXml() {
         `tagId="${escapeXml(anno.tagId || "")}"`,
         `tagName="${escapeXml(anno.tagName || "")}"`,
         `tagPath="${escapeXml(anno.tagPath || "")}"`,
-        `shape="${escapeXml(anno.shape || "rect")}"`,
-        `color="${escapeXml(anno.color || "")}"`
+        `shape="${escapeXml(normalizeAnnoShape(anno.shape || "rect"))}"`,
+        `color="${escapeXml(anno.color || "")}"`,
+        `borderStyle="${escapeXml(normalizeAnnoBorderStyle(anno.borderStyle || "solid"))}"`,
+        `borderWidth="${escapeXml(String(normalizeAnnoBorderWidth(anno.borderWidth || 2)))}"`
       ];
       if (anno.parentAnnoId) annoAttrs.push(`parentAnnoId="${escapeXml(anno.parentAnnoId)}"`);
       lines.push(`        <annotation ${annoAttrs.join(" ")}>`);
@@ -1180,7 +1472,7 @@ function getAutoLayoutTargetTags() {
     id: tag.id,
     name: String(tag.name || "").trim(),
     path: templatePath(tag.id),
-    style: getTagStyle(tag) || { shape: "rect", color: "#2e6f86" }
+    style: getTagStyle(tag) || { shape: "rect", color: "#2e6f86", borderStyle: "solid", borderWidth: 2 }
   })).filter((tag) => tag.name);
 
   const sentLike = mapped.filter((tag) => {
@@ -1211,7 +1503,8 @@ async function autoDrawLayoutByAI() {
 
   const payload = {
     imageDataUrl,
-    categories: targetTags.map((tag) => ({ name: tag.name, path: tag.path }))
+    categories: targetTags.map((tag) => ({ name: tag.name, path: tag.path })),
+    xmlHintLines: buildXmlHintLinesForPrompt()
   };
 
   const res = await fetch(`${API_BASE}/api/layout/suggest`, {
@@ -1254,6 +1547,8 @@ async function autoDrawLayoutByAI() {
       tagPath: matched.path,
       shape: matched.style.shape || "rect",
       color: matched.style.color || "#2e6f86",
+      borderStyle: normalizeAnnoBorderStyle(matched.style.borderStyle || "solid"),
+      borderWidth: normalizeAnnoBorderWidth(matched.style.borderWidth || 2),
       transcription: String(item?.transcription || item?.text || "").trim(),
       meaning: String(item?.meaning || "").trim()
     });
@@ -1326,6 +1621,8 @@ function createGlyphAnnoFromDraft() {
     tagPath: templatePath(charTag.id),
     shape: "rect",
     color: style.color,
+    borderStyle: "solid",
+    borderWidth: 2,
     transcription: glyphChar || "",
     rect: { ...rect },
     attrs: {
@@ -1898,8 +2195,10 @@ function appendDraftsToAnnotations(img, drafts, options = {}) {
       tagId: draftItem.tagId,
       tagName: draftItem.tagName,
       tagPath: draftItem.tagPath,
-      shape: draftItem.shape,
+      shape: normalizeAnnoShape(draftItem.shape),
       color: draftItem.color,
+      borderStyle: normalizeAnnoBorderStyle(draftItem.borderStyle || "solid"),
+      borderWidth: normalizeAnnoBorderWidth(draftItem.borderWidth || 2),
       transcription: textToUse,
       rect: { ...draftItem.rect },
       attrs,
@@ -1967,21 +2266,65 @@ function findAnnoById(img, annoId) {
 }
 
 function getTagStyle(tag) {
-  return tag.style || null;
+  if (!tag?.style) return null;
+  return {
+    shape: normalizeAnnoShape(tag.style.shape),
+    color: tag.style.color || "#2e6f86",
+    borderStyle: normalizeAnnoBorderStyle(tag.style.borderStyle || "solid"),
+    borderWidth: normalizeAnnoBorderWidth(tag.style.borderWidth || 2)
+  };
 }
 
-function syncStyleToTag(tagId, shape, color) {
+function syncStyleToTag(tagId, shapeOrBorderStyle, color, borderWidth) {
   const tag = findTemplateTag(tagId);
   if (!tag) return;
-  tag.style = { shape, color };
+  const nextShape = normalizeAnnoShape(shapeOrBorderStyle);
+  const nextBorderStyle = normalizeAnnoBorderStyle(shapeOrBorderStyle);
+  const fallbackWidth = normalizeAnnoBorderWidth(tag.style?.borderWidth || 2);
+  const nextBorderWidth = normalizeAnnoBorderWidth(borderWidth == null ? fallbackWidth : borderWidth);
+  tag.style = { shape: nextShape, color, borderStyle: nextBorderStyle, borderWidth: nextBorderWidth };
   state.images.forEach((img) => {
     img.annotations.forEach((anno) => {
       if (anno.tagId === tagId) {
-        anno.shape = shape;
+        anno.shape = nextShape;
         anno.color = color;
+        anno.borderStyle = nextBorderStyle;
+        anno.borderWidth = nextBorderWidth;
       }
     });
   });
+}
+
+function syncStyleForSameTagAnnos(sourceAnno, shapeOrBorderStyle, color, borderWidth) {
+  if (!sourceAnno) return;
+  const nextShape = normalizeAnnoShape(shapeOrBorderStyle);
+  const nextBorderStyle = normalizeAnnoBorderStyle(shapeOrBorderStyle);
+  const nextBorderWidth = normalizeAnnoBorderWidth(borderWidth == null ? sourceAnno.borderWidth || 2 : borderWidth);
+  const nextColor = String(color || "#2e6f86");
+
+  const sourceTagId = String(sourceAnno.tagId || "").trim();
+  const sourceTagPath = String(sourceAnno.tagPath || "").trim();
+  const sourceTagName = String(sourceAnno.tagName || "").trim();
+
+  state.images.forEach((img) => {
+    (img.annotations || []).forEach((anno) => {
+      const annoTagId = String(anno.tagId || "").trim();
+      const annoTagPath = String(anno.tagPath || "").trim();
+      const annoTagName = String(anno.tagName || "").trim();
+      const sameTag = sourceTagId
+        ? annoTagId === sourceTagId
+        : (sourceTagPath ? annoTagPath === sourceTagPath : annoTagName === sourceTagName);
+      if (!sameTag) return;
+      anno.shape = nextShape;
+      anno.color = nextColor;
+      anno.borderStyle = nextBorderStyle;
+      anno.borderWidth = nextBorderWidth;
+    });
+  });
+
+  if (sourceTagId) {
+    syncStyleToTag(sourceTagId, shapeOrBorderStyle, nextColor, nextBorderWidth);
+  }
 }
 
 function syncPickerFromActiveTag() {
@@ -1995,7 +2338,9 @@ function syncPickerFromActiveTag() {
     renderColorPreview(null);
     return;
   }
-  el.annoShapeSelect.value = style.shape;
+  if (el.annoShapeSelect) {
+    el.annoShapeSelect.value = normalizeAnnoBorderStyle(style.borderStyle || "solid");
+  }
   el.annoColor.value = style.color;
   renderColorPreview(style.color);
 }
@@ -2171,7 +2516,7 @@ function parseImportedXmlProject(xmlText) {
     const shape = String(tagNode.getAttribute("shape") || "").trim();
     const color = String(tagNode.getAttribute("color") || "").trim();
     const item = { id, name, parentId, attrs, order };
-    if (shape || color) item.style = { shape: shape || "rect", color: color || "#2e6f86" };
+    if (shape || color) item.style = { shape: normalizeAnnoShape(shape), color: color || "#2e6f86" };
     template.push(item);
     Array.from(tagNode.children).filter((n) => n.tagName === "tag").forEach((child) => walkTag(child, id));
   }
@@ -2204,8 +2549,10 @@ function parseImportedXmlProject(xmlText) {
         tagId: a.getAttribute("tagId") || "",
         tagName: a.getAttribute("tagName") || "",
         tagPath: a.getAttribute("tagPath") || "",
-        shape: a.getAttribute("shape") || "rect",
+        shape: normalizeAnnoShape(a.getAttribute("shape") || "rect"),
         color: a.getAttribute("color") || "#2e6f86",
+        borderStyle: normalizeAnnoBorderStyle(a.getAttribute("borderStyle") || "solid"),
+        borderWidth: normalizeAnnoBorderWidth(a.getAttribute("borderWidth") || "2"),
         transcription: a.querySelector("transcription")?.textContent || "",
         rect: {
           x: Number(rectNode?.getAttribute("x") || 0),
@@ -2258,6 +2605,12 @@ async function createBookFromImportedFile(file) {
   if (isXml) {
     const text = await file.text();
     data = parseImportedXmlProject(text);
+    try {
+      const hint = extractXmlHintFromText(text, file.name || "import.xml");
+      data.aiLayoutHints = normalizeAiLayoutHints({ examples: [hint], updatedAt: new Date().toISOString() });
+    } catch (_) {
+      // Ignore hint parse failure; XML import itself may still be valid for project data.
+    }
   } else if (isPdf) {
     const images = await buildPdfImageItems(file);
     data = createDefaultBookData();
@@ -2298,7 +2651,8 @@ function collectCurrentBookData() {
     selectedTemplateTagId: state.selectedTemplateTagId,
     activeMainPanel: state.activeMainPanel,
     activeRightPanel: state.activeRightPanel,
-    glyphRegistry: state.glyphRegistry
+    glyphRegistry: state.glyphRegistry,
+    aiLayoutHints: normalizeAiLayoutHints(state.aiLayoutHints)
   };
 }
 
@@ -2312,12 +2666,14 @@ function applyBookData(parsed) {
   state.glyphRegistry = Array.isArray(parsed.glyphRegistry)
     ? parsed.glyphRegistry.map((item) => normalizeGlyphRegistryItem(item))
     : [];
+  state.aiLayoutHints = normalizeAiLayoutHints(parsed.aiLayoutHints || {});
   state.glyphDraft = null;
   state.glyphCreateActive = false;
   state.pendingDrafts = [];
   state.draftRect = null;
   ensureTemplateOrder();
   state.images.forEach((img, idx) => ensureImageMeta(img, idx));
+  renderXmlHintInfo();
 }
 
 function createDefaultBookData() {
@@ -2328,7 +2684,8 @@ function createDefaultBookData() {
     selectedTemplateTagId: templateDefaults[0]?.id || null,
     activeMainPanel: "edit",
     activeRightPanel: "object",
-    glyphRegistry: []
+    glyphRegistry: [],
+    aiLayoutHints: { examples: [], activeFileNames: [], cachedPromptLines: [], updatedAt: "" }
   };
 }
 
@@ -2831,7 +3188,7 @@ function renderBoxes() {
 
   img.annotations.forEach((anno) => {
     const box = document.createElement("div");
-    box.className = `box shape-${anno.shape}`;
+    box.className = "box shape-rect";
     if (anno.id === state.selectedAnnoId) box.classList.add("selected");
     box.style.zIndex = String(50 + templateDepth(anno.tagId));
     if (state.selectedTagFilterName) {
@@ -2843,15 +3200,7 @@ function renderBoxes() {
     box.style.width = `${anno.rect.w * 100}%`;
     box.style.height = `${anno.rect.h * 100}%`;
     box.style.setProperty("--shape-color", anno.color);
-    if (anno.shape === "rect") {
-      box.style.borderColor = anno.color;
-      box.style.background = hexToRgba(anno.color, 0.18);
-    } else if (anno.shape === "line") {
-      box.style.background = "none";
-      box.style.borderTop = `3px solid ${anno.color}`;
-    } else {
-      box.style.background = `repeating-linear-gradient(-45deg, ${anno.color} 0 4px, transparent 4px 8px)`;
-    }
+    applyBoxVisualStyle(box, anno.color, anno.borderStyle, anno.borderWidth);
     box.title = `${anno.tagPath}${parentMap.get(anno.id) ? " (子框)" : ""}`;
     box.addEventListener("click", (evt) => {
       evt.stopPropagation();
@@ -2863,16 +3212,14 @@ function renderBoxes() {
       renderAll();
     });
     if (anno.id === state.selectedAnnoId) {
-      if (anno.shape === "rect") {
-        ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
-          const handle = document.createElement("span");
-          handle.className = `box-resize-handle handle-${dir}`;
-          handle.dataset.dir = dir;
-          handle.dataset.annoId = anno.id;
-          handle.addEventListener("mousedown", (evt) => evt.stopPropagation());
-          box.appendChild(handle);
-        });
-      }
+      ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
+        const handle = document.createElement("span");
+        handle.className = `box-resize-handle handle-${dir}`;
+        handle.dataset.dir = dir;
+        handle.dataset.annoId = anno.id;
+        handle.addEventListener("mousedown", (evt) => evt.stopPropagation());
+        box.appendChild(handle);
+      });
 
       const delBtn = document.createElement("button");
       delBtn.className = "box-delete";
@@ -2892,8 +3239,9 @@ function renderBoxes() {
   });
 
   if (state.draftRect) {
-    const draftShape = state.glyphCreateActive ? "rect" : el.annoShapeSelect.value;
+    const draftShape = "rect";
     const draftColor = state.glyphCreateActive ? "#8f3b2e" : el.annoColor.value;
+    const draftBorderStyle = state.glyphCreateActive ? "solid" : normalizeAnnoBorderStyle(el.annoShapeSelect.value);
     const draft = document.createElement("div");
     draft.className = `box temp shape-${draftShape}`;
     draft.style.left = `${state.draftRect.x * 100}%`;
@@ -2901,35 +3249,19 @@ function renderBoxes() {
     draft.style.width = `${state.draftRect.w * 100}%`;
     draft.style.height = `${state.draftRect.h * 100}%`;
     draft.style.setProperty("--shape-color", draftColor);
-    if (draftShape === "rect") {
-      draft.style.borderColor = draftColor;
-      draft.style.background = hexToRgba(draftColor, 0.18);
-    } else if (draftShape === "line") {
-      draft.style.background = "none";
-      draft.style.borderTop = `3px dashed ${draftColor}`;
-    } else {
-      draft.style.background = `repeating-linear-gradient(-45deg, ${draftColor} 0 4px, transparent 4px 8px)`;
-    }
+    applyBoxVisualStyle(draft, draftColor, draftBorderStyle, 2, true);
     el.drawLayer.appendChild(draft);
   }
 
   state.pendingDrafts.forEach((draftItem) => {
     const draft = document.createElement("div");
-    draft.className = `box temp shape-${draftItem.shape}`;
+    draft.className = "box temp shape-rect";
     draft.style.left = `${draftItem.rect.x * 100}%`;
     draft.style.top = `${draftItem.rect.y * 100}%`;
     draft.style.width = `${draftItem.rect.w * 100}%`;
     draft.style.height = `${draftItem.rect.h * 100}%`;
     draft.style.setProperty("--shape-color", draftItem.color);
-    if (draftItem.shape === "rect") {
-      draft.style.borderColor = draftItem.color;
-      draft.style.background = hexToRgba(draftItem.color, 0.18);
-    } else if (draftItem.shape === "line") {
-      draft.style.background = "none";
-      draft.style.borderTop = `3px dashed ${draftItem.color}`;
-    } else {
-      draft.style.background = `repeating-linear-gradient(-45deg, ${draftItem.color} 0 4px, transparent 4px 8px)`;
-    }
+    applyBoxVisualStyle(draft, draftItem.color, draftItem.borderStyle || "solid", 2, true);
     draft.title = `待保存: ${draftItem.tagPath}`;
     el.drawLayer.appendChild(draft);
   });
@@ -2940,6 +3272,7 @@ function renderPropsEditor() {
   const anno = selectedAnno();
   el.propsEditor.innerHTML = "";
   state.propInputs = {};
+  state.objectStyleInputs = {};
   if (!img) return;
 
   if (!anno) {
@@ -2990,6 +3323,64 @@ function renderPropsEditor() {
     row.appendChild(input);
     el.propsEditor.appendChild(row);
   });
+
+  const styleColorRow = document.createElement("div");
+  styleColorRow.className = "prop-row";
+  styleColorRow.innerHTML = "<span>框线颜色</span>";
+  const styleColorInput = document.createElement("input");
+  styleColorInput.type = "color";
+  styleColorInput.value = anno.color || "#2e6f86";
+  styleColorRow.appendChild(styleColorInput);
+  el.propsEditor.appendChild(styleColorRow);
+
+  const styleWidthRow = document.createElement("div");
+  styleWidthRow.className = "prop-row";
+  styleWidthRow.innerHTML = "<span>线宽(px)</span>";
+  const styleWidthInput = document.createElement("input");
+  styleWidthInput.type = "number";
+  styleWidthInput.min = "1";
+  styleWidthInput.max = "8";
+  styleWidthInput.step = "1";
+  styleWidthInput.value = String(normalizeAnnoBorderWidth(anno.borderWidth));
+  styleWidthRow.appendChild(styleWidthInput);
+  el.propsEditor.appendChild(styleWidthRow);
+
+  const styleTypeRow = document.createElement("div");
+  styleTypeRow.className = "prop-row";
+  styleTypeRow.innerHTML = "<span>线型</span>";
+  const styleTypeSelect = document.createElement("select");
+  ["solid", "dashed", "dotted"].forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item;
+    option.textContent = item === "solid" ? "实线" : item === "dashed" ? "虚线" : "点线";
+    styleTypeSelect.appendChild(option);
+  });
+  styleTypeSelect.value = normalizeAnnoBorderStyle(anno.borderStyle);
+  styleTypeRow.appendChild(styleTypeSelect);
+  el.propsEditor.appendChild(styleTypeRow);
+
+  state.objectStyleInputs = {
+    color: styleColorInput,
+    borderWidth: styleWidthInput,
+    borderStyle: styleTypeSelect
+  };
+
+  const previewCurrentAnnoStyle = () => {
+    const currentAnno = selectedAnno();
+    if (!currentAnno || currentAnno.id !== anno.id) return;
+    syncStyleForSameTagAnnos(
+      currentAnno,
+      styleTypeSelect.value,
+      styleColorInput.value || "#2e6f86",
+      styleWidthInput.value
+    );
+    styleWidthInput.value = String(normalizeAnnoBorderWidth(styleWidthInput.value));
+    renderBoxes();
+  };
+  styleColorInput.addEventListener("input", previewCurrentAnnoStyle);
+  styleWidthInput.addEventListener("input", previewCurrentAnnoStyle);
+  styleTypeSelect.addEventListener("change", previewCurrentAnnoStyle);
+
   el.propNote.value = anno.transcription || "";
   if (el.propMeaning) {
     if (meaningEnabled) {
@@ -3031,7 +3422,7 @@ function renderEditMode() {
     const count = state.pendingDrafts.length;
     el.drawState.textContent = count > 0
       ? `待保存 ${count} 个框，点击保存标注统一保存（可拖动已有框微调位置）`
-      : "先选择标签和画框样式，再点击“开始添加”按钮（未开启添加时可拖动已有框）";
+      : "先选择标签和颜色，再点击“开始添加”按钮（未开启添加时可拖动已有框）";
     el.startDrawBtn.textContent = "开始添加";
   }
 }
@@ -3433,8 +3824,7 @@ function bindDrawEvents() {
       const x = clamp01((evt.clientX - rect.left) / rect.width);
       const y = clamp01((evt.clientY - rect.top) / rect.height);
       const base = normalizeRect({ x1: start.x, y1: start.y, x2: x, y2: y });
-      const shape = state.glyphCreateActive ? "rect" : el.annoShapeSelect.value;
-      state.draftRect = toShapeRect(base, shape);
+      state.draftRect = toShapeRect(base, "rect");
       renderBoxes();
       renderEditMode();
     }
@@ -3518,15 +3908,22 @@ function bindDrawEvents() {
       } else {
         const tag = findTemplateTag(state.activeDraftTagId);
         if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
-          const style = getTagStyle(tag) || { shape: el.annoShapeSelect.value, color: el.annoColor.value };
-          if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.shape, style.color);
+          const style = getTagStyle(tag) || {
+            shape: "rect",
+            color: el.annoColor.value,
+            borderStyle: normalizeAnnoBorderStyle(el.annoShapeSelect.value),
+            borderWidth: 2
+          };
+          if (!getTagStyle(tag)) syncStyleToTag(tag.id, style.borderStyle, style.color);
           state.pendingDrafts.push({
             rect: { ...state.draftRect },
             tagId: tag.id,
             tagName: tag.name,
             tagPath: templatePath(tag.id),
-            shape: style.shape,
-            color: style.color
+            shape: "rect",
+            color: style.color,
+            borderStyle: normalizeAnnoBorderStyle(style.borderStyle || el.annoShapeSelect.value),
+            borderWidth: normalizeAnnoBorderWidth(style.borderWidth || 2)
           });
         }
       }
@@ -3796,6 +4193,7 @@ function bindEvents() {
   window.addEventListener("keydown", (evt) => {
     if (evt.key === "Escape") {
       closeExportFormatModal();
+      closeXmlHintsModal();
     }
   });
 
@@ -3814,6 +4212,48 @@ function bindEvents() {
         el.autoDrawByAiBtn.disabled = false;
         el.autoDrawByAiBtn.textContent = original;
       }
+    });
+  }
+
+  if (el.feedXmlHintsBtn && el.feedXmlHintsInput) {
+    el.feedXmlHintsBtn.addEventListener("click", () => {
+      openXmlHintsModal();
+    });
+
+    if (el.xmlHintsAddBtn) {
+      el.xmlHintsAddBtn.addEventListener("click", () => {
+        el.feedXmlHintsInput.click();
+      });
+    }
+
+    if (el.xmlHintsCloseBtn) {
+      el.xmlHintsCloseBtn.addEventListener("click", () => {
+        closeXmlHintsModal();
+      });
+    }
+
+    if (el.xmlHintsModal) {
+      el.xmlHintsModal.addEventListener("click", (evt) => {
+        if (evt.target === el.xmlHintsModal) closeXmlHintsModal();
+      });
+    }
+
+    el.feedXmlHintsInput.addEventListener("change", (evt) => {
+      const files = evt.target.files;
+      if (!files || files.length === 0) return;
+      Promise.resolve()
+        .then(async () => {
+          await ingestXmlHintFiles(files);
+          renderXmlHintsModalList();
+          renderXmlHintInfo();
+          await saveState();
+        })
+        .catch((err) => {
+          alert(err?.message || "XML 示例投喂失败");
+        })
+        .finally(() => {
+          evt.target.value = "";
+        });
     });
   }
 
@@ -4130,6 +4570,14 @@ function bindEvents() {
     if (supportsMeaningAttrByTagId(anno.tagId)) {
       anno.transcription = el.propNote.value.trim();
     }
+    if (state.objectStyleInputs) {
+      syncStyleForSameTagAnnos(
+        anno,
+        state.objectStyleInputs.borderStyle?.value || "solid",
+        state.objectStyleInputs.color?.value || "#2e6f86",
+        state.objectStyleInputs.borderWidth?.value || 2
+      );
+    }
     const idValue = (anno.attrs.id || "").trim();
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     renderAll();
@@ -4218,4 +4666,5 @@ initApp().catch((err) => {
   alert(err?.message || "初始化失败");
 });
 renderColorPreview();
+renderXmlHintInfo();
 renderAll();
