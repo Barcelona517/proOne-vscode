@@ -3381,11 +3381,11 @@ function renderGlyphHistoryList() {
     if (item.previewDataUrl) {
       const previewImg = document.createElement("img");
       previewImg.src = item.previewDataUrl;
-      previewImg.alt = "字形缩略图";
+      previewImg.alt = `${glyphDisplayText(item)} 缩略图`;
       previewWrap.appendChild(previewImg);
     } else {
       previewWrap.classList.add("empty");
-      previewWrap.textContent = "图";
+      previewWrap.textContent = glyphDisplayText(item);
     }
     head.appendChild(previewWrap);
 
