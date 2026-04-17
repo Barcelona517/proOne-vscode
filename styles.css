@@ -1029,6 +1029,10 @@ hr {
   width: min(720px, calc(100vw - 24px));
 }
 
+.glyph-history-modal-card {
+  width: min(760px, calc(100vw - 24px));
+}
+
 .image-edit-grid {
   margin-top: 8px;
   display: grid;

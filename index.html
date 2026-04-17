@@ -255,8 +255,7 @@
             </div>
             <div id="glyphCreateHint" class="muted">未进入造字框选模式</div>
 
-            <div class="picker-title">最近造字记录</div>
-            <div id="glyphRecentList" class="tag-tree"></div>
+            <button id="glyphHistoryBtn" class="mini-btn" type="button">查看造字记录</button>
           </div>
         </div>
       </aside>
@@ -372,6 +371,16 @@
       </div>
       <div class="xml-hints-footer">
         <button id="imageEditModalCloseBtn" class="mini-btn" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="glyphHistoryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="glyphHistoryTitle">
+    <div class="modal-card glyph-history-modal-card">
+      <div id="glyphHistoryTitle" class="section-title">历史造字记录</div>
+      <div id="glyphHistoryList" class="version-list"></div>
+      <div class="xml-hints-footer">
+        <button id="glyphHistoryCloseBtn" class="mini-btn" type="button">关闭</button>
       </div>
     </div>
   </div>

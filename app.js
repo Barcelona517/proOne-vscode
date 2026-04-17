@@ -227,7 +227,10 @@ const el = {
   glyphAssignSaveBtn: document.getElementById("glyphAssignSaveBtn"),
   glyphCreateHint: document.getElementById("glyphCreateHint"),
   glyphCapturedPreview: document.getElementById("glyphCapturedPreview"),
-  glyphRecentList: document.getElementById("glyphRecentList"),
+  glyphHistoryBtn: document.getElementById("glyphHistoryBtn"),
+  glyphHistoryModal: document.getElementById("glyphHistoryModal"),
+  glyphHistoryList: document.getElementById("glyphHistoryList"),
+  glyphHistoryCloseBtn: document.getElementById("glyphHistoryCloseBtn"),
   annoShapeSelect: document.getElementById("annoShapeSelect"),
   annoColor: document.getElementById("annoColor"),
   annoColorPreview: document.getElementById("annoColorPreview"),
@@ -3279,7 +3282,7 @@ function renderMainPanelTabs() {
 }
 
 function renderGlyphPanel() {
-  if (!el.glyphCreateHint || !el.glyphRecentList) return;
+  if (!el.glyphCreateHint) return;
   const viewerOnlyRecent = getCurrentBookRole() === "viewer";
 
   if (viewerOnlyRecent) {
@@ -3319,37 +3322,62 @@ function renderGlyphPanel() {
       el.glyphCapturedPreview.style.display = "none";
     }
   }
+}
 
-  el.glyphRecentList.innerHTML = "";
-  const ul = document.createElement("ul");
-  const recent = state.glyphRegistry.slice(0, 8);
-  if (recent.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "暂无造字记录";
-    ul.appendChild(li);
-  } else {
-    recent.forEach((item, idx) => {
-      const li = document.createElement("li");
-      const row = document.createElement("div");
-      row.className = "inline-action-row";
-      const text = document.createElement("span");
-      text.textContent = `${glyphDisplayText(item)} -> ${item.codepoint} [${glyphCollectedLabel(item)}] (${item.imageName})`;
-      row.appendChild(text);
-      if (!viewerOnlyRecent) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "mini-btn";
-        btn.textContent = item.collected ? "更新官方码" : "标记已收录";
-        btn.addEventListener("click", () => {
-          markGlyphAsCollectedByIndex(idx);
-        });
-        row.appendChild(btn);
-      }
-      li.appendChild(row);
-      ul.appendChild(li);
-    });
+function renderGlyphHistoryList() {
+  if (!el.glyphHistoryList) return;
+  const viewerOnlyRecent = getCurrentBookRole() === "viewer";
+  el.glyphHistoryList.innerHTML = "";
+
+  if (!Array.isArray(state.glyphRegistry) || state.glyphRegistry.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.textContent = "暂无造字记录";
+    el.glyphHistoryList.appendChild(empty);
+    return;
   }
-  el.glyphRecentList.appendChild(ul);
+
+  state.glyphRegistry.forEach((item, idx) => {
+    const row = document.createElement("div");
+    row.className = "version-item";
+
+    const text = document.createElement("div");
+    text.textContent = `${glyphDisplayText(item)} -> ${item.codepoint} [${glyphCollectedLabel(item)}] (${item.imageName})`;
+    row.appendChild(text);
+
+    const meta = document.createElement("div");
+    meta.className = "version-item-status";
+    meta.textContent = `创建时间：${new Date(item.createdAt || Date.now()).toLocaleString()}`;
+    row.appendChild(meta);
+
+    if (!viewerOnlyRecent) {
+      const actions = document.createElement("div");
+      actions.className = "version-item-actions";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "mini-btn";
+      btn.textContent = item.collected ? "更新官方码" : "标记已收录";
+      btn.addEventListener("click", () => {
+        markGlyphAsCollectedByIndex(idx);
+        renderGlyphHistoryList();
+      });
+      actions.appendChild(btn);
+      row.appendChild(actions);
+    }
+
+    el.glyphHistoryList.appendChild(row);
+  });
+}
+
+function openGlyphHistoryModal() {
+  if (!el.glyphHistoryModal) return;
+  renderGlyphHistoryList();
+  el.glyphHistoryModal.classList.remove("hidden");
+}
+
+function closeGlyphHistoryModal() {
+  if (!el.glyphHistoryModal) return;
+  el.glyphHistoryModal.classList.add("hidden");
 }
 
 function renderRightPanelTabs() {
@@ -6280,8 +6308,29 @@ function bindEvents() {
       closeCollabMembersModal();
       closeVersionModal();
       closeImageEditModal();
+      closeGlyphHistoryModal();
     }
   });
+
+  if (el.glyphHistoryBtn) {
+    el.glyphHistoryBtn.addEventListener("click", () => {
+      openGlyphHistoryModal();
+    });
+  }
+
+  if (el.glyphHistoryCloseBtn) {
+    el.glyphHistoryCloseBtn.addEventListener("click", () => {
+      closeGlyphHistoryModal();
+    });
+  }
+
+  if (el.glyphHistoryModal) {
+    el.glyphHistoryModal.addEventListener("click", (evt) => {
+      if (evt.target === el.glyphHistoryModal) {
+        closeGlyphHistoryModal();
+      }
+    });
+  }
 
   if (el.autoDrawByAiBtn) {
     el.autoDrawByAiBtn.addEventListener("click", async () => {
