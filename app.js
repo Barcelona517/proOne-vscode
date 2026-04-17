@@ -4557,14 +4557,19 @@ function renderThumbs() {
   el.thumbList.innerHTML = "";
   const editable = canEditCurrentBook();
   const selectedForDelete = new Set(state.batchDeleteImageIds);
+  const changedImageIds = state.versionPreview.active
+    ? new Set(Object.keys(state.versionPreview.diffByImage || {}))
+    : null;
   state.images.forEach((img) => {
+    const changed = Boolean(changedImageIds && changedImageIds.has(img.id));
     const card = document.createElement("div");
-    card.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""}`;
+    card.className = `thumb-item ${img.id === state.selectedImageId ? "active" : ""} ${changed ? "changed" : ""}`.trim();
     card.draggable = editable;
     card.dataset.imageId = img.id;
     card.innerHTML = `
       <div class="thumb-head">
         <label class="thumb-select"><input type="checkbox" data-select-id="${img.id}" ${selectedForDelete.has(img.id) ? "checked" : ""} />选中</label>
+        ${changed ? '<span class="thumb-changed-badge">有改动</span>' : ""}
       </div>
       <img src="${img.src}" alt="${img.name}" />
       <div class="thumb-meta">${img.name}</div>
