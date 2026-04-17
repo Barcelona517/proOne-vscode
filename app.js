@@ -12,17 +12,28 @@ const LAST_VIEW_KEY = `${STORAGE_KEY}_last_view`;
 const AUTH_TOKEN_KEY = `${STORAGE_KEY}_auth_token`;
 const GLYPH_PUA_START = 0xE000;
 const GLYPH_PUA_END = 0xF8FF;
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:3000`;
+const APP_HOST = window.location.hostname || "127.0.0.1";
+const IS_LOCAL_HOST = /^(localhost|127\.0\.0\.1)$/i.test(APP_HOST);
+const API_PROTOCOL = (window.location.protocol === "file:" || IS_LOCAL_HOST) ? "http:" : window.location.protocol;
+const WS_PROTOCOL = API_PROTOCOL === "https:" ? "wss" : "ws";
+const API_BASE = `${API_PROTOCOL}//${APP_HOST}:3000`;
 
 let currentBookId = null;
 let booksIndexCache = [];
 let saveStateQueue = Promise.resolve();
+let saveStateDebounceTimer = null;
+let saveStateDebounceForce = false;
+const SAVE_STATE_DEBOUNCE_MS = 1200;
+const lastSavedPayloadKeyByBook = new Map();
 let dbPromise = null;
 const collabState = {
   token: String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim(),
   user: null,
   ws: null,
   wsConnected: false,
+  wsReconnectTimer: null,
+  wsReconnectAttempts: 0,
+  wsManualClose: false,
   currentBookVersion: 0,
   pendingWsSave: null,
   presenceUsers: {},
@@ -106,13 +117,17 @@ const state = {
   renamingImage: false,
   reviewData: {
     submissions: [],
-    editorBases: {}
+    editorBases: {},
+    activeVersionId: ""
   },
-  reviewMode: {
+  versionPreview: {
     active: false,
-    submissionId: "",
+    versionId: "",
+    versionNo: 0,
+    showDiffOnly: true,
     diffByImage: {},
-    savedPageIds: []
+    targetByImage: {},
+    baseByImage: {}
   },
   collabPanel: {
     openBookId: "",
@@ -129,11 +144,10 @@ const el = {
   libraryImportInput: document.getElementById("libraryImportInput"),
   backToLibraryBtn: document.getElementById("backToLibraryBtn"),
   submitOrReviewBtn: document.getElementById("submitOrReviewBtn"),
-  endReviewBtn: document.getElementById("endReviewBtn"),
-  saveAllReviewBtn: document.getElementById("saveAllReviewBtn"),
   versionHistoryBtn: document.getElementById("versionHistoryBtn"),
   authUserLabel: document.getElementById("authUserLabel"),
   authOpenBtn: document.getElementById("authOpenBtn"),
+  authRenameBtn: document.getElementById("authRenameBtn"),
   authLogoutBtn: document.getElementById("authLogoutBtn"),
   shareBookBtn: document.getElementById("shareBookBtn"),
   authModal: document.getElementById("authModal"),
@@ -160,7 +174,10 @@ const el = {
   viewerTitle: document.getElementById("viewerTitle"),
   viewerTitleInput: document.getElementById("viewerTitleInput"),
   collabLiveHint: document.getElementById("collabLiveHint"),
-  saveReviewPageBtn: document.getElementById("saveReviewPageBtn"),
+  versionPreviewBar: document.getElementById("versionPreviewBar"),
+  versionPreviewTitle: document.getElementById("versionPreviewTitle"),
+  versionPreviewToggleBtn: document.getElementById("versionPreviewToggleBtn"),
+  versionPreviewExitBtn: document.getElementById("versionPreviewExitBtn"),
   renameImageBtn: document.getElementById("renameImageBtn"),
   mainPanelBtnEdit: document.getElementById("mainPanelBtnEdit"),
   mainPanelBtnGlyph: document.getElementById("mainPanelBtnGlyph"),
@@ -169,6 +186,7 @@ const el = {
   panelBtnObject: document.getElementById("panelBtnObject"),
   panelBtnDraw: document.getElementById("panelBtnDraw"),
   panelBtnTags: document.getElementById("panelBtnTags"),
+  panelSwitcher: document.getElementById("panelSwitcher"),
   sectionProps: document.getElementById("sectionProps"),
   sectionDraw: document.getElementById("sectionDraw"),
   sectionTags: document.getElementById("sectionTags"),
@@ -322,7 +340,7 @@ function getCurrentBookRole() {
 }
 
 function canEditCurrentBook() {
-  if (state.reviewMode?.active) return false;
+  if (state.versionPreview.active) return false;
   const role = getCurrentBookRole();
   return role === "owner" || role === "editor";
 }
@@ -337,10 +355,6 @@ function canInviteMembers(role) {
 }
 
 function ensureCanEdit(actionName = "执行编辑操作") {
-  if (state.reviewMode?.active) {
-    alert("当前处于审核模式，请先结束审核");
-    return false;
-  }
   if (canEditCurrentBook()) return true;
   alert(`你当前是仅读角色，不能${actionName}`);
   return false;
@@ -454,7 +468,7 @@ function deepClone(value) {
 
 function normalizeReviewData(data) {
   const base = data && typeof data === "object" ? data : {};
-  const submissions = Array.isArray(base.submissions) ? base.submissions.map((item) => ({
+  const submissions = Array.isArray(base.submissions) ? base.submissions.map((item, idx) => ({
     id: String(item?.id || uid("review_ver")),
     createdAt: String(item?.createdAt || new Date().toISOString()),
     submitter: {
@@ -463,15 +477,26 @@ function normalizeReviewData(data) {
       email: String(item?.submitter?.email || ""),
       accountNo: Number(item?.submitter?.accountNo || 0)
     },
+    versionNo: Number(item?.versionNo || idx + 1),
+    parentVersionId: String(item?.parentVersionId || ""),
+    diffCount: Number(item?.diffCount || 0),
+    snapshot: item?.snapshot && typeof item.snapshot === "object" ? item.snapshot : null,
     status: String(item?.status || "pending"),
     savedPageIds: Array.isArray(item?.savedPageIds) ? item.savedPageIds.map((x) => String(x || "")).filter(Boolean) : [],
     reviewedAt: item?.reviewedAt ? String(item.reviewedAt) : "",
     baseSnapshot: Array.isArray(item?.baseSnapshot) ? item.baseSnapshot : [],
     targetSnapshot: Array.isArray(item?.targetSnapshot) ? item.targetSnapshot : []
   })) : [];
+
+  submissions.forEach((item, idx) => {
+    if (!item.parentVersionId && idx > 0) item.parentVersionId = submissions[idx - 1].id;
+    if (!Number.isFinite(item.versionNo) || item.versionNo <= 0) item.versionNo = idx + 1;
+  });
+
   const editorBases = base.editorBases && typeof base.editorBases === "object" ? base.editorBases : {};
   const lastApprovedSnapshot = Array.isArray(base.lastApprovedSnapshot) ? base.lastApprovedSnapshot : [];
-  return { submissions, editorBases, lastApprovedSnapshot };
+  const activeVersionId = String(base.activeVersionId || submissions[submissions.length - 1]?.id || "");
+  return { submissions, editorBases, lastApprovedSnapshot, activeVersionId };
 }
 
 function captureReviewSnapshot(images = state.images) {
@@ -563,7 +588,7 @@ function getEditorBaselineSnapshot(userId, currentSnapshot) {
 
 function hasUnsubmittedEditorChanges() {
   if (getCurrentBookRole() !== "editor") return false;
-  if (!currentBookId || state.reviewMode.active) return false;
+  if (!currentBookId) return false;
   const userId = String(collabState.user?.id || "");
   if (!userId) return false;
   const currentSnapshot = captureReviewSnapshot(state.images);
@@ -572,70 +597,17 @@ function hasUnsubmittedEditorChanges() {
   return Object.keys(diff).length > 0;
 }
 
-function activeReviewSubmission() {
-  if (!state.reviewMode.active || !state.reviewMode.submissionId) return null;
-  return state.reviewData.submissions.find((item) => item.id === state.reviewMode.submissionId) || null;
-}
-
-function hasCurrentImageReviewDiff() {
-  if (!state.reviewMode.active) return false;
-  const imageId = String(state.selectedImageId || "");
-  if (!imageId) return false;
-  return !!state.reviewMode.diffByImage[imageId];
-}
-
-function rebuildReviewDiffFromActiveSubmission() {
-  const submission = activeReviewSubmission();
-  if (!submission) {
-    state.reviewMode.diffByImage = {};
-    state.reviewMode.savedPageIds = [];
-    return;
-  }
-  state.reviewMode.savedPageIds = Array.isArray(submission.savedPageIds) ? submission.savedPageIds.slice() : [];
-  state.reviewMode.diffByImage = buildReviewDiffByImage(
-    submission.baseSnapshot,
-    submission.targetSnapshot,
-    state.reviewMode.savedPageIds
-  );
-}
-
-function enterReviewMode(submissionId) {
-  const role = getCurrentBookRole();
-  if (role !== "owner") {
-    alert("仅管理者可审核改动");
-    return;
-  }
-  const submission = state.reviewData.submissions.find((item) => item.id === submissionId);
-  if (!submission) {
-    alert("未找到对应版本");
-    return;
-  }
-  state.reviewMode.active = true;
-  state.reviewMode.submissionId = submission.id;
-  rebuildReviewDiffFromActiveSubmission();
-  const firstImageId = Object.keys(state.reviewMode.diffByImage)[0] || "";
-  if (firstImageId) {
-    state.selectedImageId = firstImageId;
-  }
-  submission.status = "reviewing";
-  renderAll();
-}
-
-function exitReviewMode() {
-  state.reviewMode.active = false;
-  state.reviewMode.submissionId = "";
-  state.reviewMode.diffByImage = {};
-  state.reviewMode.savedPageIds = [];
-  renderAll();
-}
-
 function submitCurrentChangesForReview() {
   const role = getCurrentBookRole();
-  if (role !== "editor") {
-    alert("仅编辑者可提交改动");
+  if (!(role === "editor" || role === "owner")) {
+    alert("仅管理者或编辑者可提交改动");
     return;
   }
   const userId = String(collabState.user?.id || "");
+  if (!userId) {
+    alert("请先登录协作账号");
+    return;
+  }
   const currentSnapshot = captureReviewSnapshot(state.images);
   const baseSnapshot = getEditorBaselineSnapshot(userId, currentSnapshot);
 
@@ -645,8 +617,15 @@ function submitCurrentChangesForReview() {
     return;
   }
 
+  const maxVersionNo = state.reviewData.submissions.reduce((max, item) => {
+    const no = Number(item?.versionNo || 0);
+    return no > max ? no : max;
+  }, 0);
+
   const version = {
-    id: uid("review_ver"),
+    id: uid("version"),
+    versionNo: maxVersionNo + 1,
+    parentVersionId: String(state.reviewData.activeVersionId || ""),
     createdAt: new Date().toISOString(),
     submitter: {
       userId,
@@ -654,135 +633,303 @@ function submitCurrentChangesForReview() {
       email: String(collabState.user?.email || ""),
       accountNo: Number(collabState.user?.accountNo || 0)
     },
-    status: "pending",
-    savedPageIds: [],
-    reviewedAt: "",
-    baseSnapshot: deepClone(baseSnapshot),
-    targetSnapshot: deepClone(currentSnapshot)
+    diffCount: Object.keys(diffByImage).length,
+    snapshot: deepClone(collectCurrentBookData())
   };
 
   state.reviewData.submissions.push(version);
+  state.reviewData.activeVersionId = version.id;
   state.reviewData.editorBases[userId] = deepClone(currentSnapshot);
+  state.reviewData.lastApprovedSnapshot = deepClone(currentSnapshot);
   saveState({ wait: true, force: true });
-  alert("改动已提交给管理者审核");
+  alert("已提交一版到版本记录");
   renderAll();
 }
 
-function applyTargetSnapshotToImage(imageId, targetSnapshot) {
-  const target = snapshotMap(targetSnapshot).get(String(imageId || ""));
-  const image = state.images.find((img) => img.id === imageId);
-  if (!image) return;
-  const nextAnnos = Array.isArray(target?.annotations) ? deepClone(target.annotations) : [];
-  image.annotations = nextAnnos;
-}
-
-function saveCurrentReviewPage() {
-  if (!state.reviewMode.active) return;
-  const submission = activeReviewSubmission();
-  if (!submission) return;
-  const imageId = String(state.selectedImageId || "");
-  if (!imageId || !state.reviewMode.diffByImage[imageId]) {
-    alert("当前页没有待保存改动");
-    return;
-  }
-  applyTargetSnapshotToImage(imageId, submission.targetSnapshot);
-  if (!submission.savedPageIds.includes(imageId)) {
-    submission.savedPageIds.push(imageId);
-  }
-  rebuildReviewDiffFromActiveSubmission();
-  saveState({ force: true });
-  renderAll();
-}
-
-function saveAllReviewPages() {
-  if (!state.reviewMode.active) return;
-  const submission = activeReviewSubmission();
-  if (!submission) return;
-  const pendingImageIds = Object.keys(state.reviewMode.diffByImage);
-  pendingImageIds.forEach((imageId) => {
-    applyTargetSnapshotToImage(imageId, submission.targetSnapshot);
-    if (!submission.savedPageIds.includes(imageId)) {
-      submission.savedPageIds.push(imageId);
-    }
+function snapshotByImage(snapshot) {
+  const byImage = {};
+  (Array.isArray(snapshot) ? snapshot : []).forEach((item) => {
+    const key = String(item?.id || "");
+    if (!key) return;
+    byImage[key] = {
+      id: key,
+      name: String(item?.name || ""),
+      annotations: Array.isArray(item?.annotations) ? deepClone(item.annotations) : []
+    };
   });
-  submission.status = "approved";
-  submission.reviewedAt = new Date().toISOString();
-  state.reviewData.lastApprovedSnapshot = deepClone(submission.targetSnapshot);
-  rebuildReviewDiffFromActiveSubmission();
-  saveState({ force: true });
+  return byImage;
+}
+
+function snapshotFromVersionRecord(version) {
+  if (!version || typeof version !== "object") return [];
+  if (version.snapshot && typeof version.snapshot === "object" && Array.isArray(version.snapshot.images)) {
+    return captureReviewSnapshot(version.snapshot.images);
+  }
+  if (Array.isArray(version.targetSnapshot)) {
+    return deepClone(version.targetSnapshot);
+  }
+  return [];
+}
+
+function exitVersionPreview() {
+  state.versionPreview = {
+    active: false,
+    versionId: "",
+    versionNo: 0,
+    showDiffOnly: true,
+    diffByImage: {},
+    targetByImage: {},
+    baseByImage: {}
+  };
   renderAll();
 }
 
-function finishReviewMode() {
-  if (!state.reviewMode.active) return;
-  const submission = activeReviewSubmission();
-  if (!submission) {
-    exitReviewMode();
+function enterVersionPreview(versionId) {
+  const role = getCurrentBookRole();
+  if (!(role === "owner" || role === "editor" || role === "viewer")) {
+    alert("当前角色不可查看版本差异");
+    return;
+  }
+  const submissions = state.reviewData.submissions;
+  const byId = new Map(submissions.map((item) => [item.id, item]));
+  const current = byId.get(versionId);
+  if (!current) {
+    alert("未找到该版本");
     return;
   }
 
-  const pendingCount = Object.keys(state.reviewMode.diffByImage).length;
-  if (pendingCount === 0) {
-    submission.status = "approved";
-    submission.reviewedAt = new Date().toISOString();
-    state.reviewData.lastApprovedSnapshot = deepClone(submission.targetSnapshot);
-  } else {
-    submission.status = "pending";
+  const previous = current.parentVersionId ? byId.get(String(current.parentVersionId || "")) : null;
+  const targetSnapshot = snapshotFromVersionRecord(current);
+  const baseSnapshot = previous ? snapshotFromVersionRecord(previous) : [];
+  const diffByImage = buildReviewDiffByImage(baseSnapshot, targetSnapshot, []);
+
+  state.versionPreview = {
+    active: true,
+    versionId,
+    versionNo: Number(current.versionNo || 0),
+    showDiffOnly: Object.keys(diffByImage).length > 0,
+    diffByImage,
+    targetByImage: snapshotByImage(targetSnapshot),
+    baseByImage: snapshotByImage(baseSnapshot)
+  };
+  state.selectedAnnoId = null;
+
+  const firstChangedImageId = Object.keys(diffByImage)[0];
+  if (firstChangedImageId) {
+    state.selectedImageId = firstChangedImageId;
   }
-  saveState({ force: true });
-  exitReviewMode();
+
+  closeVersionModal();
+  renderAll();
 }
 
-function pendingReviewSubmission() {
-  const list = state.reviewData.submissions.filter((item) => item.status === "pending" || item.status === "reviewing");
-  return list[list.length - 1] || null;
+function syncVersionPreviewBarUi() {
+  if (!el.versionPreviewBar) return;
+  if (!state.versionPreview.active) {
+    el.versionPreviewBar.classList.add("hidden");
+    return;
+  }
+  el.versionPreviewBar.classList.remove("hidden");
+  if (el.versionPreviewTitle) {
+    const modeText = state.versionPreview.showDiffOnly ? "仅新增/减少" : "全部";
+    el.versionPreviewTitle.textContent = `版本 ${state.versionPreview.versionNo} 对比（当前: ${modeText}，绿=新增，红=减少）`;
+  }
+  if (el.versionPreviewToggleBtn) {
+    el.versionPreviewToggleBtn.textContent = state.versionPreview.showDiffOnly
+      ? "切换为显示全部"
+      : "切换为仅显示新增/减少";
+  }
+}
+
+function restoreVersion(versionId) {
+  const role = getCurrentBookRole();
+  if (role !== "owner") {
+    alert("仅管理者可恢复版本");
+    return;
+  }
+  const version = state.reviewData.submissions.find((item) => item.id === versionId);
+  if (!version) {
+    alert("未找到该版本");
+    return;
+  }
+  const ok = window.confirm("确定恢复到该版本吗？当前未提交改动将被覆盖。");
+  if (!ok) return;
+
+  const preservedReviewData = deepClone(state.reviewData);
+  applyBookData(version.snapshot || {});
+  state.reviewData = normalizeReviewData(preservedReviewData);
+  state.reviewData.activeVersionId = version.id;
+  saveState({ wait: true, force: true });
+  renderAll();
+  closeVersionModal();
+}
+
+function getVersionMaps(submissions) {
+  const byId = new Map();
+  const children = new Map();
+  submissions.forEach((item) => {
+    byId.set(item.id, item);
+    const parentId = String(item.parentVersionId || "");
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(item);
+  });
+  children.forEach((arr) => {
+    arr.sort((a, b) => Number(a.versionNo || 0) - Number(b.versionNo || 0));
+  });
+  return { byId, children };
+}
+
+function getActiveVersionPath(submissions, activeVersionId) {
+  if (!Array.isArray(submissions) || submissions.length === 0) return [];
+  const { byId } = getVersionMaps(submissions);
+  let current = byId.get(String(activeVersionId || "")) || submissions[submissions.length - 1];
+  if (!current) return [];
+
+  const reversed = [];
+  const visited = new Set();
+  while (current && !visited.has(current.id)) {
+    reversed.push(current);
+    visited.add(current.id);
+    const parentId = String(current.parentVersionId || "");
+    current = parentId ? byId.get(parentId) : null;
+  }
+  return reversed.reverse();
+}
+
+function collectVersionSubtreeIds(childrenMap, rootId) {
+  const ids = new Set();
+  const stack = [String(rootId || "")];
+  while (stack.length > 0) {
+    const currentId = stack.pop();
+    if (!currentId || ids.has(currentId)) continue;
+    ids.add(currentId);
+    const childList = childrenMap.get(currentId) || [];
+    childList.forEach((child) => {
+      stack.push(String(child.id || ""));
+    });
+  }
+  return ids;
+}
+
+function createVersionCard(item, role) {
+  const card = document.createElement("div");
+  card.className = "version-item";
+
+  const head = document.createElement("div");
+  head.className = "version-item-head";
+  const title = document.createElement("strong");
+  title.textContent = `版本 ${Number(item?.versionNo || 0)}`;
+  const status = document.createElement("span");
+  status.className = "version-item-status";
+  status.textContent = `变更页数 ${Number(item?.diffCount || 0)}`;
+  head.appendChild(title);
+  head.appendChild(status);
+
+  const info = document.createElement("div");
+  info.className = "muted";
+  const who = item.submitter?.displayName || item.submitter?.email || "未知用户";
+  const accountNo = Number(item.submitter?.accountNo || 0);
+  const accountText = accountNo > 0 ? ` #${accountNo}` : "";
+  info.textContent = `${who}${accountText} 提交于 ${new Date(item.createdAt).toLocaleString()}`;
+
+  const actions = document.createElement("div");
+  actions.className = "version-item-actions";
+
+  const previewBtn = document.createElement("button");
+  previewBtn.className = "mini-btn";
+  previewBtn.type = "button";
+  previewBtn.textContent = "查看差异";
+  previewBtn.addEventListener("click", () => {
+    enterVersionPreview(item.id);
+  });
+  actions.appendChild(previewBtn);
+
+  if (role === "owner") {
+    const restoreBtn = document.createElement("button");
+    restoreBtn.className = "mini-btn";
+    restoreBtn.type = "button";
+    restoreBtn.textContent = "恢复此版";
+    restoreBtn.addEventListener("click", () => {
+      restoreVersion(item.id);
+    });
+    actions.appendChild(restoreBtn);
+  } else {
+    const note = document.createElement("span");
+    note.className = "version-item-status";
+    note.textContent = "仅查看";
+    actions.appendChild(note);
+  }
+
+  card.appendChild(head);
+  card.appendChild(info);
+  card.appendChild(actions);
+  return card;
 }
 
 function openVersionModal() {
   if (!el.versionModal || !el.versionList) return;
   el.versionList.innerHTML = "";
-  const items = state.reviewData.submissions.slice().reverse();
-  if (items.length === 0) {
+  const submissions = state.reviewData.submissions
+    .slice()
+    .sort((a, b) => Number(a.versionNo || 0) - Number(b.versionNo || 0));
+
+  if (submissions.length === 0) {
     const empty = document.createElement("div");
     empty.className = "xml-hints-empty";
     empty.textContent = "暂无提交版本";
     el.versionList.appendChild(empty);
+    el.versionModal.classList.remove("hidden");
+    return;
   }
-  items.forEach((item, index) => {
-    const card = document.createElement("div");
-    card.className = "version-item";
-    const head = document.createElement("div");
-    head.className = "version-item-head";
-    const title = document.createElement("strong");
-    title.textContent = `版本 ${items.length - index}`;
-    const status = document.createElement("span");
-    status.className = "version-item-status";
-    status.textContent = item.status === "approved" ? "已通过" : item.status === "reviewing" ? "审核中" : "待审核";
-    head.appendChild(title);
-    head.appendChild(status);
 
-    const info = document.createElement("div");
-    info.className = "muted";
-    const who = item.submitter?.displayName || item.submitter?.email || "未知用户";
-    info.textContent = `${who} 提交于 ${new Date(item.createdAt).toLocaleString()}`;
+  const role = getCurrentBookRole();
+  const { byId, children } = getVersionMaps(submissions);
+  const activePath = getActiveVersionPath(submissions, state.reviewData.activeVersionId);
 
-    const actions = document.createElement("div");
-    actions.className = "version-item-actions";
-    const openBtn = document.createElement("button");
-    openBtn.className = "mini-btn";
-    openBtn.type = "button";
-    openBtn.textContent = "查看此版";
-    openBtn.addEventListener("click", () => {
-      enterReviewMode(item.id);
-      closeVersionModal();
+  activePath.forEach((item, idx) => {
+    el.versionList.appendChild(createVersionCard(item, role));
+
+    if (idx >= activePath.length - 1) return;
+    const next = activePath[idx + 1];
+    const currentSubtree = collectVersionSubtreeIds(children, item.id);
+    const nextSubtree = collectVersionSubtreeIds(children, next.id);
+    const hidden = Array.from(currentSubtree)
+      .filter((id) => id !== item.id && !nextSubtree.has(id))
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .sort((a, b) => Number(a.versionNo || 0) - Number(b.versionNo || 0));
+
+    if (hidden.length === 0) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "revoked-group";
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "mini-btn revoked-toggle-btn";
+    toggleBtn.type = "button";
+    toggleBtn.textContent = `显示被撤销版本 (${hidden.length})`;
+
+    const hiddenList = document.createElement("div");
+    hiddenList.className = "revoked-list hidden";
+    hidden.forEach((revokedVersion) => {
+      hiddenList.appendChild(createVersionCard(revokedVersion, role));
     });
-    actions.appendChild(openBtn);
 
-    card.appendChild(head);
-    card.appendChild(info);
-    card.appendChild(actions);
-    el.versionList.appendChild(card);
+    toggleBtn.addEventListener("click", (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const nextExpanded = hiddenList.classList.contains("hidden");
+      hiddenList.classList.toggle("hidden", !nextExpanded);
+      toggleBtn.textContent = nextExpanded
+        ? `收起被撤销版本 (${hidden.length})`
+        : `显示被撤销版本 (${hidden.length})`;
+    });
+
+    wrapper.appendChild(toggleBtn);
+    wrapper.appendChild(hiddenList);
+    el.versionList.appendChild(wrapper);
   });
+
   el.versionModal.classList.remove("hidden");
 }
 
@@ -793,30 +940,16 @@ function closeVersionModal() {
 
 function syncReviewToolbarUi() {
   const role = getCurrentBookRole();
-  const isOwner = role === "owner";
-  const isEditor = role === "editor";
-  const inReview = !!state.reviewMode.active;
+  const canSubmit = role === "owner" || role === "editor";
+  const canViewVersions = role === "owner" || role === "editor" || role === "viewer";
 
   if (el.submitOrReviewBtn) {
-    if (isOwner) {
-      el.submitOrReviewBtn.classList.toggle("hidden", inReview);
-      el.submitOrReviewBtn.textContent = "查看改动";
-    } else if (isEditor) {
-      el.submitOrReviewBtn.classList.remove("hidden");
-      el.submitOrReviewBtn.textContent = "提交改动";
-    } else {
-      el.submitOrReviewBtn.classList.add("hidden");
-    }
+    el.submitOrReviewBtn.classList.toggle("hidden", !canSubmit || !currentBookId);
+    el.submitOrReviewBtn.textContent = "提交改动";
   }
-
-  if (el.endReviewBtn) el.endReviewBtn.classList.toggle("hidden", !(isOwner && inReview));
-  if (el.saveAllReviewBtn) el.saveAllReviewBtn.classList.toggle("hidden", !(isOwner && inReview));
-  if (el.versionHistoryBtn) el.versionHistoryBtn.classList.toggle("hidden", !isOwner || inReview);
-  if (el.saveReviewPageBtn) {
-    const show = isOwner && inReview && hasCurrentImageReviewDiff();
-    el.saveReviewPageBtn.classList.toggle("hidden", !show);
-  }
-  if (el.renameImageBtn) el.renameImageBtn.classList.toggle("hidden", inReview);
+  if (el.versionHistoryBtn) el.versionHistoryBtn.classList.toggle("hidden", !canViewVersions || !currentBookId);
+  if (el.renameImageBtn) el.renameImageBtn.classList.remove("hidden");
+  syncVersionPreviewBarUi();
 }
 
 function updateAuthUi() {
@@ -830,6 +963,7 @@ function updateAuthUi() {
       : "";
   }
   if (el.authOpenBtn) el.authOpenBtn.classList.toggle("hidden", !!collabState.user);
+  if (el.authRenameBtn) el.authRenameBtn.classList.toggle("hidden", !collabState.user);
   if (el.authLogoutBtn) el.authLogoutBtn.classList.toggle("hidden", !collabState.user);
   if (el.shareBookBtn) {
     el.shareBookBtn.classList.toggle("hidden", !collabState.user || !currentBookId || !canInviteMembers(currentRole));
@@ -870,6 +1004,12 @@ async function bootstrapAuthUser() {
 }
 
 function closeCollabSocket() {
+  collabState.wsManualClose = true;
+  if (collabState.wsReconnectTimer) {
+    window.clearTimeout(collabState.wsReconnectTimer);
+    collabState.wsReconnectTimer = null;
+  }
+  collabState.wsReconnectAttempts = 0;
   if (collabState.ws) {
     try { collabState.ws.close(); } catch (_) {}
   }
@@ -880,6 +1020,18 @@ function closeCollabSocket() {
     collabState.pendingWsSave.reject(new Error("协作连接已断开"));
   }
   collabState.pendingWsSave = null;
+}
+
+function scheduleCollabReconnect() {
+  if (collabState.wsManualClose) return;
+  if (!collabState.token) return;
+  if (collabState.wsReconnectTimer) return;
+  const attempts = Math.max(0, Number(collabState.wsReconnectAttempts || 0));
+  const delay = Math.min(5000, 600 + attempts * 400);
+  collabState.wsReconnectTimer = window.setTimeout(() => {
+    collabState.wsReconnectTimer = null;
+    connectCollabSocket();
+  }, delay);
 }
 
 function updateBookMetaFromCollabBook(book) {
@@ -906,13 +1058,19 @@ function connectCollabSocket() {
   if (collabState.ws && (collabState.ws.readyState === WebSocket.OPEN || collabState.ws.readyState === WebSocket.CONNECTING)) {
     return;
   }
+  if (!collabState.token) return;
+  collabState.wsManualClose = false;
 
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const url = `${proto}://${window.location.hostname}:3000/ws?token=${encodeURIComponent(collabState.token)}`;
+  const url = `${WS_PROTOCOL}://${APP_HOST}:3000/ws?token=${encodeURIComponent(collabState.token)}`;
   const ws = new WebSocket(url);
   collabState.ws = ws;
 
   ws.addEventListener("open", () => {
+    collabState.wsReconnectAttempts = 0;
+    if (collabState.wsReconnectTimer) {
+      window.clearTimeout(collabState.wsReconnectTimer);
+      collabState.wsReconnectTimer = null;
+    }
     collabState.wsConnected = true;
     resetPresenceState();
     if (currentBookId) {
@@ -921,23 +1079,52 @@ function connectCollabSocket() {
   });
 
   ws.addEventListener("close", () => {
+    if (collabState.pendingWsSave?.reject) {
+      const pending = collabState.pendingWsSave;
+      collabState.pendingWsSave = null;
+      pending.reject(new Error("协作连接已断开"));
+    }
     collabState.wsConnected = false;
     resetPresenceState();
     if (collabState.ws === ws) {
       collabState.ws = null;
     }
+    collabState.wsReconnectAttempts += 1;
+    scheduleCollabReconnect();
   });
 
   ws.addEventListener("error", () => {
+    if (collabState.pendingWsSave?.reject) {
+      const pending = collabState.pendingWsSave;
+      collabState.pendingWsSave = null;
+      pending.reject(new Error("协作连接异常"));
+    }
     collabState.wsConnected = false;
+    if (collabState.ws === ws) {
+      collabState.ws = null;
+    }
+    collabState.wsReconnectAttempts += 1;
+    scheduleCollabReconnect();
   });
 
   ws.addEventListener("message", (evt) => {
     try {
       const msg = JSON.parse(String(evt.data || "{}"));
+
+      if (msg.type === "error") {
+        const message = String(msg?.message || "协作保存失败");
+        if (collabState.pendingWsSave?.reject) {
+          const pending = collabState.pendingWsSave;
+          collabState.pendingWsSave = null;
+          pending.reject(new Error(message));
+          return;
+        }
+      }
+
       if (msg.type === "subscribed" && msg.book) {
         resetPresenceState();
         updateBookMetaFromCollabBook(msg.book);
+        lastSavedPayloadKeyByBook.set(String(msg.book.id || ""), payloadKey(msg.book.payload || {}));
         collabState.currentBookVersion = Number(msg.book.version || collabState.currentBookVersion || 1);
         renderBooksList();
         return;
@@ -990,6 +1177,7 @@ function connectCollabSocket() {
 
       if (msg.type === "book_updated" && msg.book) {
         updateBookMetaFromCollabBook(msg.book);
+        lastSavedPayloadKeyByBook.set(String(msg.book.id || ""), payloadKey(msg.book.payload || {}));
         if (msg.book.id === currentBookId) {
           const nextVersion = Number(msg.book.version || 1);
           const pending = collabState.pendingWsSave;
@@ -1239,6 +1427,19 @@ function reportSaveError(err) {
     return;
   }
   alert(msg);
+}
+
+function isVersionConflictError(err) {
+  const msg = String(err?.message || "");
+  return /版本冲突|409|conflict/i.test(msg);
+}
+
+function payloadKey(payload) {
+  try {
+    return JSON.stringify(payload || {});
+  } catch (_) {
+    return "";
+  }
 }
 
 function showEditorView() {
@@ -1638,6 +1839,12 @@ function closeXmlHintsModal() {
 
 function glyphCollectedLabel(item) {
   return item?.collected ? "已被收录" : "未收录";
+}
+
+function glyphDisplayText(item) {
+  const official = normalizeCodepointInput(item?.officialCodepoint || "");
+  if (!official) return "未收录字形";
+  return String(item?.glyphChar || "").trim() || "已收录字形";
 }
 
 function normalizeGlyphRegistryItem(item) {
@@ -2632,6 +2839,28 @@ function renderMainPanelTabs() {
 
 function renderGlyphPanel() {
   if (!el.glyphCreateHint || !el.glyphRecentList) return;
+  const viewerOnlyRecent = getCurrentBookRole() === "viewer";
+
+  if (viewerOnlyRecent) {
+    state.glyphCreateActive = false;
+    state.glyphDraft = null;
+  }
+
+  const toggleHidden = (node, hidden) => {
+    if (node) node.classList.toggle("hidden", hidden);
+  };
+
+  toggleHidden(el.glyphRuleBtn, viewerOnlyRecent);
+  toggleHidden(el.glyphCapturedPreview, viewerOnlyRecent);
+  toggleHidden(el.glyphReselectBtn?.closest(".glyph-captured-head"), viewerOnlyRecent);
+  toggleHidden(el.glyphCharInput?.closest("label"), viewerOnlyRecent);
+  toggleHidden(el.glyphManualCodepointInput?.closest("label"), viewerOnlyRecent);
+  toggleHidden(el.glyphIdsInput?.closest("label"), viewerOnlyRecent);
+  toggleHidden(el.glyphNoteInput?.closest("label"), viewerOnlyRecent);
+  toggleHidden(el.glyphAutoSuggestBtn, viewerOnlyRecent);
+  toggleHidden(el.glyphStartCreateBtn?.closest(".row-actions"), viewerOnlyRecent);
+  toggleHidden(el.glyphCreateHint, viewerOnlyRecent);
+
   el.glyphCreateHint.textContent = state.glyphCreateActive
     ? "造字模式已开启：请在中间图片上拖拽框选"
     : (state.glyphDraft ? "已框选字图，请分配并保存造字" : "未进入造字框选模式");
@@ -2663,16 +2892,18 @@ function renderGlyphPanel() {
       const row = document.createElement("div");
       row.className = "inline-action-row";
       const text = document.createElement("span");
-      text.textContent = `${item.glyphChar} -> ${item.codepoint} [${glyphCollectedLabel(item)}] (${item.imageName})`;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "mini-btn";
-      btn.textContent = item.collected ? "更新官方码" : "标记已收录";
-      btn.addEventListener("click", () => {
-        markGlyphAsCollectedByIndex(idx);
-      });
+      text.textContent = `${glyphDisplayText(item)} -> ${item.codepoint} [${glyphCollectedLabel(item)}] (${item.imageName})`;
       row.appendChild(text);
-      row.appendChild(btn);
+      if (!viewerOnlyRecent) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "mini-btn";
+        btn.textContent = item.collected ? "更新官方码" : "标记已收录";
+        btn.addEventListener("click", () => {
+          markGlyphAsCollectedByIndex(idx);
+        });
+        row.appendChild(btn);
+      }
       li.appendChild(row);
       ul.appendChild(li);
     });
@@ -2681,14 +2912,22 @@ function renderGlyphPanel() {
 }
 
 function renderRightPanelTabs() {
-  const active = ["object", "draw", "tags"].includes(state.activeRightPanel) ? state.activeRightPanel : "object";
+  const canUseDrawPanel = getCurrentBookRole() !== "viewer";
+  const allowedPanels = canUseDrawPanel ? ["object", "draw", "tags"] : ["object", "tags"];
+  const active = allowedPanels.includes(state.activeRightPanel) ? state.activeRightPanel : "object";
   state.activeRightPanel = active;
 
+  if (el.panelSwitcher) {
+    el.panelSwitcher.classList.toggle("viewer-two-tabs", !canUseDrawPanel);
+  }
+
   el.panelBtnObject.classList.toggle("active", active === "object");
+  el.panelBtnDraw.classList.toggle("hidden", !canUseDrawPanel);
   el.panelBtnDraw.classList.toggle("active", active === "draw");
   el.panelBtnTags.classList.toggle("active", active === "tags");
 
   el.sectionProps.classList.toggle("active", active === "object");
+  el.sectionDraw.classList.toggle("hidden", !canUseDrawPanel);
   el.sectionDraw.classList.toggle("active", active === "draw");
   el.sectionTags.classList.toggle("active", active === "tags");
 
@@ -3276,6 +3515,15 @@ function collectCurrentBookData() {
 }
 
 function applyBookData(parsed) {
+  state.versionPreview = {
+    active: false,
+    versionId: "",
+    versionNo: 0,
+    showDiffOnly: true,
+    diffByImage: {},
+    targetByImage: {},
+    baseByImage: {}
+  };
   state.images = Array.isArray(parsed.images) ? parsed.images : [];
   state.templateTags = Array.isArray(parsed.templateTags) ? parsed.templateTags : [];
   state.selectedImageId = parsed.selectedImageId || state.images[0]?.id || null;
@@ -3294,12 +3542,6 @@ function applyBookData(parsed) {
       getEditorBaselineSnapshot(uidText, currentSnapshot);
     }
   }
-  state.reviewMode = {
-    active: false,
-    submissionId: "",
-    diffByImage: {},
-    savedPageIds: []
-  };
   state.glyphDraft = null;
   state.glyphCreateActive = false;
   state.pendingDrafts = [];
@@ -3319,7 +3561,7 @@ function createDefaultBookData() {
     activeRightPanel: "object",
     glyphRegistry: [],
     aiLayoutHints: { examples: [], activeFileNames: [], cachedPromptLines: [], updatedAt: "" },
-    reviewData: { submissions: [], editorBases: {}, lastApprovedSnapshot: [] }
+    reviewData: { submissions: [], editorBases: {}, lastApprovedSnapshot: [], activeVersionId: "" }
   };
 }
 
@@ -3380,32 +3622,28 @@ async function migrateLocalStorageBooksIfNeeded() {
 function saveState(options = {}) {
   if (!currentBookId) return Promise.resolve();
   if (!collabState.token) return Promise.resolve();
-  const force = !!options.force;
-  if (!force && !canEditCurrentBook()) return Promise.resolve();
+  const requestedForce = !!options.force;
+  if (!requestedForce && !canEditCurrentBook()) return Promise.resolve();
   const wait = !!options.wait;
-  const payload = collectCurrentBookData();
-  const nextTask = async () => {
-    let updatedBook;
+
+  const runSaveTask = async (force) => {
+    if (!force && !canEditCurrentBook()) return;
+    const payload = collectCurrentBookData();
+    const localPayloadKey = payloadKey(payload);
+    const savedPayloadKey = lastSavedPayloadKeyByBook.get(String(currentBookId || ""));
+    if (!force && localPayloadKey && savedPayloadKey && localPayloadKey === savedPayloadKey) {
+      return;
+    }
+
     const books = loadBooksIndex();
     const meta = books.find((item) => item.id === currentBookId);
     const nextName = meta?.name || "未命名书籍";
-    const baseVersion = Number(meta?.version || collabState.currentBookVersion || 1);
-    if (collabState.wsConnected) {
-      try {
-        updatedBook = await sendWsSaveBook(currentBookId, nextName, payload, baseVersion);
-      } catch (_) {
-        const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: nextName,
-            payload,
-            baseVersion
-          })
-        });
-        updatedBook = data?.book;
-      }
-    } else {
+    const metaVersion = Number(meta?.version || 0);
+    const liveVersion = Number(collabState.currentBookVersion || 0);
+    // Use the newest known version to avoid false 409 conflicts from stale metadata.
+    const initialBaseVersion = Math.max(1, metaVersion, liveVersion);
+
+    const putSave = async (baseVersion) => {
       const data = await collabFetch(`/api/collab/books/${currentBookId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -3415,18 +3653,105 @@ function saveState(options = {}) {
           baseVersion
         })
       });
-      updatedBook = data?.book;
+      return data?.book;
+    };
+
+    const saveOnce = async (baseVersion) => {
+      if (collabState.wsConnected) {
+        try {
+          return await sendWsSaveBook(currentBookId, nextName, payload, baseVersion);
+        } catch (err) {
+          if (isVersionConflictError(err)) {
+            throw err;
+          }
+          return putSave(baseVersion);
+        }
+      }
+      return putSave(baseVersion);
+    };
+
+    let updatedBook;
+    let lastConflictError = null;
+    let attempt = 0;
+    let baseVersion = initialBaseVersion;
+    while (attempt < 5) {
+      try {
+        updatedBook = await saveOnce(baseVersion);
+        break;
+      } catch (err) {
+        if (isVersionConflictError(err)) {
+          lastConflictError = err;
+        }
+        if (!isVersionConflictError(err) || attempt >= 4) {
+          throw err;
+        }
+        const latestData = await collabFetch(`/api/collab/books/${currentBookId}`);
+        const latestBook = latestData?.book;
+        const latestPayloadKey = payloadKey(latestBook?.payload || {});
+        const latestVersion = Number(latestBook?.version || 0);
+        if (latestBook && latestVersion > 0) {
+          collabState.currentBookVersion = latestVersion;
+          updateBookMetaFromCollabBook(latestBook);
+          lastSavedPayloadKeyByBook.set(String(currentBookId || ""), latestPayloadKey);
+          if (latestPayloadKey && localPayloadKey && latestPayloadKey === localPayloadKey) {
+            return;
+          }
+          baseVersion = Math.max(1, latestVersion, collabState.currentBookVersion || 1);
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 120 + attempt * 80));
+        attempt += 1;
+      }
+    }
+
+    // For background autosave, after repeated conflicts fallback to non-version checked write.
+    if (!updatedBook && !wait && isVersionConflictError(lastConflictError)) {
+      try {
+        updatedBook = await putSave(0);
+      } catch (err) {
+        if (!isVersionConflictError(err)) {
+          throw err;
+        }
+      }
     }
 
     if (updatedBook) {
       collabState.currentBookVersion = Number(updatedBook.version || collabState.currentBookVersion || 1);
       updateBookMetaFromCollabBook(updatedBook);
+      lastSavedPayloadKeyByBook.set(String(currentBookId || ""), payloadKey(updatedBook.payload || payload));
     }
   };
-  saveStateQueue = saveStateQueue.then(nextTask).catch((err) => {
+
+  if (!wait) {
+    saveStateDebounceForce = saveStateDebounceForce || requestedForce;
+    if (saveStateDebounceTimer) {
+      window.clearTimeout(saveStateDebounceTimer);
+    }
+    saveStateDebounceTimer = window.setTimeout(() => {
+      const nextForce = saveStateDebounceForce;
+      saveStateDebounceForce = false;
+      saveStateDebounceTimer = null;
+      saveStateQueue = saveStateQueue.then(() => runSaveTask(nextForce)).catch((err) => {
+        if (isVersionConflictError(err)) {
+          console.warn("saveState conflict skipped:", err?.message || err);
+          return;
+        }
+        reportSaveError(err);
+      });
+    }, SAVE_STATE_DEBOUNCE_MS);
+    return Promise.resolve();
+  }
+
+  if (saveStateDebounceTimer) {
+    window.clearTimeout(saveStateDebounceTimer);
+    saveStateDebounceTimer = null;
+  }
+  const force = requestedForce || saveStateDebounceForce;
+  saveStateDebounceForce = false;
+
+  saveStateQueue = saveStateQueue.then(() => runSaveTask(force)).catch((err) => {
     reportSaveError(err);
   });
-  return wait ? saveStateQueue : Promise.resolve();
+  return saveStateQueue;
 }
 
 async function openBookById(bookId) {
@@ -3447,6 +3772,7 @@ async function openBookById(bookId) {
   const parsed = book.payload || {};
   collabState.currentBookVersion = Number(book.version || 1);
   updateBookMetaFromCollabBook(book);
+  lastSavedPayloadKeyByBook.set(String(bookId || ""), payloadKey(parsed));
   connectCollabSocket();
   if (collabState.ws && collabState.ws.readyState === WebSocket.OPEN) {
     collabState.ws.send(JSON.stringify({ type: "subscribe", bookId }));
@@ -3898,7 +4224,6 @@ async function loadState() {
 function renderThumbs() {
   el.thumbList.innerHTML = "";
   const editable = canEditCurrentBook();
-  const isOwnerReview = getCurrentBookRole() === "owner" && state.reviewMode.active;
   const selectedForDelete = new Set(state.batchDeleteImageIds);
   state.images.forEach((img) => {
     const card = document.createElement("div");
@@ -3913,22 +4238,6 @@ function renderThumbs() {
       <div class="thumb-meta">${img.name}</div>
       <div class="thumb-meta">id:${img.meta.id}</div>
     `;
-
-    if (isOwnerReview) {
-      const head = card.querySelector(".thumb-head");
-      const hasDiff = !!state.reviewMode.diffByImage[String(img.id || "")];
-      const saveBtn = document.createElement("button");
-      saveBtn.type = "button";
-      saveBtn.className = "mini-btn thumb-review-save-btn";
-      saveBtn.textContent = "保存改动";
-      saveBtn.disabled = !hasDiff;
-      saveBtn.addEventListener("click", (evt) => {
-        evt.stopPropagation();
-        state.selectedImageId = img.id;
-        saveCurrentReviewPage();
-      });
-      head.appendChild(saveBtn);
-    }
 
     card.addEventListener("dragstart", (evt) => {
       if (!editable) return;
@@ -3983,7 +4292,7 @@ function renderThumbs() {
     });
 
     const selectCheckbox = card.querySelector(`input[data-select-id="${img.id}"]`);
-    selectCheckbox.disabled = !editable || isOwnerReview;
+    selectCheckbox.disabled = !editable;
     selectCheckbox.addEventListener("click", (evt) => {
       evt.stopPropagation();
     });
@@ -4086,28 +4395,70 @@ function renderBoxes() {
   el.drawLayer.innerHTML = "";
   if (!img) return;
   const editable = canEditCurrentBook();
-  const isReviewMode = !!state.reviewMode.active;
-  const reviewDiff = isReviewMode ? state.reviewMode.diffByImage[String(img.id || "")] : null;
-  const parentMap = getParentMap(img);
 
-  const renderAnnos = [];
-  if (isReviewMode) {
-    (reviewDiff?.added || []).forEach((anno) => {
-      renderAnnos.push({ ...anno, __reviewKind: "added" });
+  if (state.versionPreview.active) {
+    const imageId = String(img.id || "");
+    const diff = state.versionPreview.diffByImage[imageId] || null;
+    const targetImage = state.versionPreview.targetByImage[imageId] || { annotations: [] };
+    const targetAnnos = Array.isArray(targetImage.annotations) ? targetImage.annotations : [];
+    const addedSet = new Set((diff?.added || []).map((anno) => String(anno?.id || "")));
+    const renderAnnos = [];
+
+    if (state.versionPreview.showDiffOnly) {
+      (diff?.added || []).forEach((anno) => {
+        renderAnnos.push({ ...anno, __diffKind: "added" });
+      });
+      (diff?.removed || []).forEach((anno) => {
+        renderAnnos.push({ ...anno, __diffKind: "removed" });
+      });
+    } else {
+      targetAnnos.forEach((anno) => {
+        const kind = addedSet.has(String(anno?.id || "")) ? "added" : "normal";
+        renderAnnos.push({ ...anno, __diffKind: kind });
+      });
+      (diff?.removed || []).forEach((anno) => {
+        renderAnnos.push({ ...anno, __diffKind: "removed" });
+      });
+    }
+
+    renderAnnos.forEach((anno) => {
+      const box = document.createElement("div");
+      box.className = "box shape-rect";
+      box.style.zIndex = String(50 + templateDepth(anno.tagId));
+      box.style.left = `${anno.rect.x * 100}%`;
+      box.style.top = `${anno.rect.y * 100}%`;
+      box.style.width = `${anno.rect.w * 100}%`;
+      box.style.height = `${anno.rect.h * 100}%`;
+
+      if (anno.__diffKind === "added") {
+        box.classList.add("box-diff-added");
+        box.style.setProperty("--shape-color", "#1f7a3a");
+        applyBoxVisualStyle(box, "#1f7a3a", "solid", 2);
+        box.title = `新增: ${anno.tagPath || anno.tagName || "标注"}`;
+      } else if (anno.__diffKind === "removed") {
+        box.classList.add("box-diff-removed");
+        box.style.setProperty("--shape-color", "#b23a2a");
+        applyBoxVisualStyle(box, "#b23a2a", "dashed", 2);
+        box.title = `减少: ${anno.tagPath || anno.tagName || "标注"}`;
+      } else {
+        box.style.setProperty("--shape-color", anno.color || "#2e6f86");
+        applyBoxVisualStyle(box, anno.color || "#2e6f86", anno.borderStyle || "solid", anno.borderWidth || 2);
+        box.title = `${anno.tagPath || anno.tagName || "标注"}`;
+      }
+      el.drawLayer.appendChild(box);
     });
-    (reviewDiff?.removed || []).forEach((anno) => {
-      renderAnnos.push({ ...anno, __reviewKind: "removed" });
-    });
-  } else {
-    img.annotations.forEach((anno) => renderAnnos.push(anno));
+    return;
   }
+
+  const parentMap = getParentMap(img);
+  const renderAnnos = [...img.annotations];
 
   renderAnnos.forEach((anno) => {
     const box = document.createElement("div");
     box.className = "box shape-rect";
-    if (!isReviewMode && anno.id === state.selectedAnnoId) box.classList.add("selected");
+    if (anno.id === state.selectedAnnoId) box.classList.add("selected");
     box.style.zIndex = String(50 + templateDepth(anno.tagId));
-    if (!isReviewMode && state.selectedTagFilterName) {
+    if (state.selectedTagFilterName) {
       if (anno.tagName === state.selectedTagFilterName) box.classList.add("matching-tag");
       else box.classList.add("dimmed");
     }
@@ -4115,32 +4466,19 @@ function renderBoxes() {
     box.style.top = `${anno.rect.y * 100}%`;
     box.style.width = `${anno.rect.w * 100}%`;
     box.style.height = `${anno.rect.h * 100}%`;
-    if (isReviewMode) {
-      if (anno.__reviewKind === "added") {
-        box.style.setProperty("--shape-color", "#2a8f54");
-        applyBoxVisualStyle(box, "#2a8f54", "solid", 2);
-        box.title = `新增: ${anno.tagPath || anno.tagName || "标注"}`;
-      } else {
-        box.style.setProperty("--shape-color", "#c23a2c");
-        applyBoxVisualStyle(box, "#c23a2c", "dashed", 2);
-        box.style.background = "rgba(194, 58, 44, 0.12)";
-        box.title = `减少: ${anno.tagPath || anno.tagName || "标注"}`;
-      }
-    } else {
-      box.style.setProperty("--shape-color", anno.color);
-      applyBoxVisualStyle(box, anno.color, anno.borderStyle, anno.borderWidth);
-      box.title = `${anno.tagPath}${parentMap.get(anno.id) ? " (子框)" : ""}`;
-      box.addEventListener("click", (evt) => {
-        evt.stopPropagation();
-        const layerRect = el.drawLayer.getBoundingClientRect();
-        const x = clamp01((evt.clientX - layerRect.left) / layerRect.width);
-        const y = clamp01((evt.clientY - layerRect.top) / layerRect.height);
-        const picked = pickTopAnnoAtPoint(img, x, y);
-        if (picked) state.selectedAnnoId = picked.id;
-        renderAll();
-      });
-    }
-    if (!isReviewMode && editable && anno.id === state.selectedAnnoId) {
+    box.style.setProperty("--shape-color", anno.color);
+    applyBoxVisualStyle(box, anno.color, anno.borderStyle, anno.borderWidth);
+    box.title = `${anno.tagPath}${parentMap.get(anno.id) ? " (子框)" : ""}`;
+    box.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      const layerRect = el.drawLayer.getBoundingClientRect();
+      const x = clamp01((evt.clientX - layerRect.left) / layerRect.width);
+      const y = clamp01((evt.clientY - layerRect.top) / layerRect.height);
+      const picked = pickTopAnnoAtPoint(img, x, y);
+      if (picked) state.selectedAnnoId = picked.id;
+      renderAll();
+    });
+    if (editable && anno.id === state.selectedAnnoId) {
       ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
         const handle = document.createElement("span");
         handle.className = `box-resize-handle handle-${dir}`;
@@ -4167,7 +4505,7 @@ function renderBoxes() {
     el.drawLayer.appendChild(box);
   });
 
-  if (!isReviewMode && state.draftRect) {
+  if (state.draftRect) {
     const draftShape = "rect";
     const draftColor = state.glyphCreateActive ? "#8f3b2e" : el.annoColor.value;
     const draftBorderStyle = state.glyphCreateActive ? "solid" : normalizeAnnoBorderStyle(el.annoShapeSelect.value);
@@ -4182,7 +4520,7 @@ function renderBoxes() {
     el.drawLayer.appendChild(draft);
   }
 
-  if (!isReviewMode) state.pendingDrafts.forEach((draftItem) => {
+  state.pendingDrafts.forEach((draftItem) => {
     const draft = document.createElement("div");
     draft.className = "box temp shape-rect";
     draft.style.left = `${draftItem.rect.x * 100}%`;
@@ -4338,8 +4676,8 @@ function renderPropsEditor() {
 }
 
 function renderEditMode() {
-  if (state.reviewMode.active) {
-    el.drawState.textContent = "审核模式：仅显示本次新增/减少改动，普通编辑已禁用";
+  if (state.versionPreview.active) {
+    el.drawState.textContent = "版本差异查看中：可切换显示全部或仅显示新增/减少，编辑已禁用";
     el.startDrawBtn.textContent = "开始添加";
     setDrawTextFieldsVisible(false);
     return;
@@ -4642,6 +4980,7 @@ function renderAll() {
 
 function syncEditorPermissionUi() {
   const editable = canEditCurrentBook();
+  const isViewerReadOnly = getCurrentBookRole() === "viewer";
   const disableWhenReadOnly = [
     el.uploadBtn,
     el.deleteSelectedImagesBtn,
@@ -4665,7 +5004,9 @@ function syncEditorPermissionUi() {
   ];
 
   disableWhenReadOnly.forEach((node) => {
-    if (node) node.disabled = !editable;
+    if (!node) return;
+    node.disabled = !editable;
+    node.classList.toggle("readonly-hidden", isViewerReadOnly && !editable);
   });
 
   [
@@ -4682,7 +5023,14 @@ function syncEditorPermissionUi() {
     el.annoShapeSelect,
     el.annoColor
   ].forEach((node) => {
-    if (node) node.disabled = !editable;
+    if (!node) return;
+    node.disabled = !editable;
+    const isTextInput =
+      node.tagName === "INPUT" ||
+      node.tagName === "TEXTAREA";
+    if (isTextInput) {
+      node.classList.toggle("readonly-hidden", isViewerReadOnly && !editable);
+    }
   });
 
   if (!editable) {
@@ -5029,7 +5377,6 @@ function bindEvents() {
         return;
       }
       await saveState({ wait: true });
-      exitReviewMode();
       await setLastView("library");
       renderBooksList();
       showLibraryView();
@@ -5040,36 +5387,25 @@ function bindEvents() {
   if (el.submitOrReviewBtn) {
     el.submitOrReviewBtn.addEventListener("click", () => {
       const role = getCurrentBookRole();
-      if (role === "editor") {
+      if (role === "owner" || role === "editor") {
+        if (state.versionPreview.active) exitVersionPreview();
         submitCurrentChangesForReview();
-        return;
-      }
-      if (role === "owner") {
-        const pending = pendingReviewSubmission();
-        if (!pending) {
-          alert("暂无待审核版本");
-          return;
-        }
-        enterReviewMode(pending.id);
       }
     });
   }
 
-  if (el.endReviewBtn) {
-    el.endReviewBtn.addEventListener("click", () => {
-      finishReviewMode();
+  if (el.versionPreviewToggleBtn) {
+    el.versionPreviewToggleBtn.addEventListener("click", () => {
+      if (!state.versionPreview.active) return;
+      state.versionPreview.showDiffOnly = !state.versionPreview.showDiffOnly;
+      renderAll();
     });
   }
 
-  if (el.saveAllReviewBtn) {
-    el.saveAllReviewBtn.addEventListener("click", () => {
-      saveAllReviewPages();
-    });
-  }
-
-  if (el.saveReviewPageBtn) {
-    el.saveReviewPageBtn.addEventListener("click", () => {
-      saveCurrentReviewPage();
+  if (el.versionPreviewExitBtn) {
+    el.versionPreviewExitBtn.addEventListener("click", () => {
+      if (!state.versionPreview.active) return;
+      exitVersionPreview();
     });
   }
 
@@ -5111,6 +5447,49 @@ function bindEvents() {
       collabState.currentBookVersion = 0;
       hideAuthModal();
       await reloadWorkspaceByMode();
+    });
+  }
+
+  if (el.authRenameBtn) {
+    el.authRenameBtn.addEventListener("click", async () => {
+      if (!collabState.user) {
+        showAuthModal();
+        return;
+      }
+      const currentName = String(collabState.user.displayName || "").trim();
+      const input = window.prompt("请输入新的昵称", currentName);
+      if (input == null) return;
+      const nextName = String(input || "").trim();
+      if (!nextName) {
+        alert("昵称不能为空");
+        return;
+      }
+      if (nextName === currentName) return;
+
+      const originalText = el.authRenameBtn.textContent || "修改昵称";
+      el.authRenameBtn.disabled = true;
+      el.authRenameBtn.textContent = "保存中...";
+      try {
+        const data = await collabFetch("/api/auth/profile", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ displayName: nextName })
+        });
+        if (data?.token) setCollabToken(data.token);
+        if (data?.user) {
+          collabState.user = data.user;
+        } else {
+          const me = await collabFetch("/api/auth/me");
+          collabState.user = me?.user || collabState.user;
+        }
+        updateAuthUi();
+        alert("昵称已更新");
+      } catch (err) {
+        alert(err?.message || "更新昵称失败");
+      } finally {
+        el.authRenameBtn.disabled = false;
+        el.authRenameBtn.textContent = originalText;
+      }
     });
   }
 

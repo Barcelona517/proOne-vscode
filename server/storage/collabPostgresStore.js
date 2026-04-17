@@ -150,6 +150,22 @@ export class CollabPostgresStore {
     return row ? toUser(row) : null;
   }
 
+  async updateUserDisplayName(userId, displayName) {
+    const nextName = String(displayName || "").trim();
+    if (!nextName) {
+      throw new Error("昵称不能为空");
+    }
+    const result = await this.pool.query(
+      `update collab_users
+       set display_name = $2
+       where id = $1
+       returning id, account_no, email, display_name, created_at`,
+      [String(userId || ""), nextName]
+    );
+    const row = result.rows[0];
+    return row ? toUser(row) : null;
+  }
+
   async getUserByAccountNo(accountNo) {
     const normalized = Number(accountNo);
     if (!Number.isInteger(normalized) || normalized <= 0) return null;

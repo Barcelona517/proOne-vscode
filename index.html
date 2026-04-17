@@ -16,6 +16,7 @@
       <div class="topbar-actions">
         <span id="authUserLabel" class="muted"></span>
         <button id="authOpenBtn" class="mini-btn" type="button">协作登录</button>
+        <button id="authRenameBtn" class="mini-btn hidden" type="button">修改昵称</button>
         <button id="authLogoutBtn" class="mini-btn hidden" type="button">退出协作</button>
         <input id="libraryImportInput" type="file" accept="image/*,.pdf,application/pdf,.xml,text/xml,application/xml" class="hidden" />
       </div>
@@ -30,9 +31,7 @@
       <div class="topbar-left-actions">
         <button id="backToLibraryBtn" class="mini-btn" type="button">返回</button>
         <button id="submitOrReviewBtn" class="mini-btn" type="button">提交改动</button>
-        <button id="endReviewBtn" class="mini-btn hidden" type="button">结束审核</button>
-        <button id="saveAllReviewBtn" class="mini-btn hidden" type="button">一键保存</button>
-        <button id="versionHistoryBtn" class="mini-btn hidden" type="button">版本查看</button>
+        <button id="versionHistoryBtn" class="mini-btn" type="button">版本查看</button>
       </div>
       <h1>古籍 Online Editor</h1>
       <div class="topbar-actions">
@@ -67,7 +66,11 @@
             <input id="viewerTitleInput" class="hidden" type="text" placeholder="输入图片名称后按回车" />
           </div>
           <div id="collabLiveHint" class="muted collab-live-hint">协作在线：0 人</div>
-          <button id="saveReviewPageBtn" class="mini-btn hidden" type="button">保存改动</button>
+          <div id="versionPreviewBar" class="version-preview-bar hidden">
+            <span id="versionPreviewTitle" class="version-preview-title"></span>
+            <button id="versionPreviewToggleBtn" class="mini-btn" type="button">仅显示新增/减少</button>
+            <button id="versionPreviewExitBtn" class="mini-btn" type="button">退出查看</button>
+          </div>
         </div>
         <div id="canvasWrap" class="canvas-wrap">
           <img id="mainImage" alt="主编辑图" draggable="false" />

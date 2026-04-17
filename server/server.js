@@ -50,9 +50,6 @@ if (collabStore) {
 }
 
 const app = express();
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true }));
-
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -63,6 +60,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, mode: storageMode, time: new Date().toISOString() });
@@ -182,6 +182,25 @@ app.get("/api/auth/me", requireCollab, requireAuth, async (req, res) => {
     res.json({ user });
   } catch (err) {
     res.status(400).json({ error: err?.message || "查询失败" });
+  }
+});
+
+app.patch("/api/auth/profile", requireCollab, requireAuth, async (req, res) => {
+  try {
+    const displayName = String(req.body?.displayName || "").trim();
+    if (!displayName) {
+      res.status(400).json({ error: "昵称不能为空" });
+      return;
+    }
+    const user = await collabStore.updateUserDisplayName(req.user.id, displayName);
+    if (!user) {
+      res.status(404).json({ error: "用户不存在" });
+      return;
+    }
+    const token = signToken(user);
+    res.json({ token, user });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "更新昵称失败" });
   }
 });
 
