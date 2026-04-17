@@ -1793,6 +1793,7 @@ function undoLastDrawAction() {
 }
 
 let drawActionHintTimer = null;
+let globalButtonFeedbackBound = false;
 
 function showDrawActionHint(message) {
   if (!el.drawState) return;
@@ -1815,6 +1816,18 @@ function pulseActionButton(node) {
   window.setTimeout(() => {
     node.classList.remove("btn-pressed-feedback");
   }, 320);
+}
+
+function bindGlobalButtonFeedback() {
+  if (globalButtonFeedbackBound) return;
+  globalButtonFeedbackBound = true;
+  document.addEventListener("pointerdown", (evt) => {
+    if (evt.button !== 0) return;
+    if (!(evt.target instanceof Element)) return;
+    const btn = evt.target.closest("button");
+    if (!btn || btn.disabled) return;
+    pulseActionButton(btn);
+  }, true);
 }
 
 function ensureTemplateOrder() {
@@ -5861,6 +5874,8 @@ function bindDrawEvents() {
 }
 
 function bindEvents() {
+  bindGlobalButtonFeedback();
+
   if (el.mainPanelBtnEdit) {
     el.mainPanelBtnEdit.addEventListener("click", () => {
       state.activeMainPanel = "edit";
