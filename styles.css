@@ -208,7 +208,11 @@ body {
 
 .ai-hint-topbar #feedXmlHintsBtn {
   margin: 0;
-  min-width: 96px;
+  min-width: 108px;
+}
+
+#exportXmlBtn {
+  min-width: 108px;
 }
 
 .ai-hint-topbar #feedXmlHintsBtn {
@@ -239,6 +243,21 @@ body {
 .right-panel {
   padding: 12px;
   overflow: auto;
+}
+
+.left-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.left-panel .panel-title.with-action {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--panel);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
 }
 
 .panel-title {
@@ -301,6 +320,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .thumb-item {
@@ -421,6 +443,8 @@ body {
 }
 
 #viewerTitle {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

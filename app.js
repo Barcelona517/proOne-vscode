@@ -466,8 +466,57 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function normalizeReviewData(data) {
+function hasFullVersionSnapshot(version) {
+  return !!(version?.snapshot && typeof version.snapshot === "object" && Array.isArray(version.snapshot.images));
+}
+
+function clonePayloadForVersionSnapshot(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return {
+    images: Array.isArray(source.images) ? deepClone(source.images) : [],
+    templateTags: Array.isArray(source.templateTags) ? deepClone(source.templateTags) : deepClone(templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }))),
+    selectedImageId: source.selectedImageId || null,
+    selectedTemplateTagId: source.selectedTemplateTagId || templateDefaults[0]?.id || null,
+    activeMainPanel: source.activeMainPanel || "edit",
+    activeRightPanel: source.activeRightPanel || "object",
+    glyphRegistry: Array.isArray(source.glyphRegistry) ? deepClone(source.glyphRegistry) : [],
+    aiLayoutHints: normalizeAiLayoutHints(source.aiLayoutHints || {}),
+    reviewData: { submissions: [], editorBases: {}, lastApprovedSnapshot: [], activeVersionId: "" }
+  };
+}
+
+function applyTargetSnapshotOnPayload(payload, targetSnapshot) {
+  const next = clonePayloadForVersionSnapshot(payload);
+  const targetById = snapshotMap(targetSnapshot);
+  if (targetById.size === 0) return next;
+
+  next.images = (Array.isArray(next.images) ? next.images : []).map((img) => {
+    const id = String(img?.id || "");
+    const target = targetById.get(id);
+    if (!target) return img;
+    return {
+      ...img,
+      name: String(target?.name || img?.name || ""),
+      annotations: deepClone(Array.isArray(target?.annotations) ? target.annotations : [])
+    };
+  });
+
+  if (!next.selectedImageId || !next.images.some((img) => img.id === next.selectedImageId)) {
+    next.selectedImageId = next.images[0]?.id || null;
+  }
+  return next;
+}
+
+function countLegacySubmissionsWithoutFullSnapshot(submissions) {
+  const list = Array.isArray(submissions) ? submissions : [];
+  return list.filter((item) => !hasFullVersionSnapshot(item) && Array.isArray(item?.targetSnapshot) && item.targetSnapshot.length > 0).length;
+}
+
+function normalizeReviewData(data, options = {}) {
   const base = data && typeof data === "object" ? data : {};
+  const seedPayload = options.seedPayload && typeof options.seedPayload === "object"
+    ? clonePayloadForVersionSnapshot(options.seedPayload)
+    : null;
   const submissions = Array.isArray(base.submissions) ? base.submissions.map((item, idx) => ({
     id: String(item?.id || uid("review_ver")),
     createdAt: String(item?.createdAt || new Date().toISOString()),
@@ -491,6 +540,37 @@ function normalizeReviewData(data) {
   submissions.forEach((item, idx) => {
     if (!item.parentVersionId && idx > 0) item.parentVersionId = submissions[idx - 1].id;
     if (!Number.isFinite(item.versionNo) || item.versionNo <= 0) item.versionNo = idx + 1;
+  });
+
+  // Auto-migrate legacy entries (targetSnapshot only) to full snapshots.
+  const byId = new Map(submissions.map((item) => [item.id, item]));
+  let latestFullSnapshot = null;
+  submissions.forEach((item) => {
+    if (hasFullVersionSnapshot(item)) {
+      latestFullSnapshot = clonePayloadForVersionSnapshot(item.snapshot);
+      return;
+    }
+    if (!Array.isArray(item.targetSnapshot) || item.targetSnapshot.length === 0) return;
+    const parent = item.parentVersionId ? byId.get(String(item.parentVersionId || "")) : null;
+    const parentSnapshot = hasFullVersionSnapshot(parent) ? parent.snapshot : null;
+    const basePayload = parentSnapshot || latestFullSnapshot || seedPayload;
+    if (!basePayload) return;
+    item.snapshot = applyTargetSnapshotOnPayload(basePayload, item.targetSnapshot);
+    latestFullSnapshot = clonePayloadForVersionSnapshot(item.snapshot);
+  });
+
+  // Backfill legacy records where diffCount was not stored.
+  submissions.forEach((item) => {
+    const prev = item.parentVersionId ? byId.get(String(item.parentVersionId || "")) : null;
+    const targetSnapshot = snapshotFromVersionRecord(item);
+    const baseSnapshot = prev ? snapshotFromVersionRecord(prev) : [];
+    const computed = Object.keys(buildReviewDiffByImage(baseSnapshot, targetSnapshot, [])).length;
+    if ((!Number.isFinite(item.diffCount) || item.diffCount <= 0) && computed > 0) {
+      item.diffCount = computed;
+    }
+    if (!Number.isFinite(item.diffCount) || item.diffCount < 0) {
+      item.diffCount = 0;
+    }
   });
 
   const editorBases = base.editorBases && typeof base.editorBases === "object" ? base.editorBases : {};
@@ -587,7 +667,8 @@ function getEditorBaselineSnapshot(userId, currentSnapshot) {
 }
 
 function hasUnsubmittedEditorChanges() {
-  if (getCurrentBookRole() !== "editor") return false;
+  const role = getCurrentBookRole();
+  if (!(role === "editor" || role === "owner")) return false;
   if (!currentBookId) return false;
   const userId = String(collabState.user?.id || "");
   if (!userId) return false;
@@ -669,6 +750,84 @@ function snapshotFromVersionRecord(version) {
     return deepClone(version.targetSnapshot);
   }
   return [];
+}
+
+function findSeedPayloadFromHistory(submissions = []) {
+  const list = Array.isArray(submissions) ? submissions : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const v = list[i];
+    if (v?.snapshot && typeof v.snapshot === "object" && Array.isArray(v.snapshot.images) && v.snapshot.images.length > 0) {
+      return deepClone(v.snapshot);
+    }
+  }
+  return null;
+}
+
+function buildRestorePayloadFromVersion(version, submissions = []) {
+  if (version?.snapshot && typeof version.snapshot === "object" && Array.isArray(version.snapshot.images)) {
+    return { payload: deepClone(version.snapshot), missingImageIds: [] };
+  }
+
+  // Legacy versions may only have annotation snapshots (without image src/meta).
+  // Patch annotations onto current payload to avoid losing image files after restore.
+  const currentPayload = deepClone(collectCurrentBookData());
+  const currentImages = Array.isArray(currentPayload.images) ? currentPayload.images : [];
+  const fallback = currentImages.length > 0
+    ? currentPayload
+    : (findSeedPayloadFromHistory(submissions) || currentPayload);
+  const targetSnapshot = snapshotFromVersionRecord(version);
+  const targetById = snapshotMap(targetSnapshot);
+  if (targetById.size === 0) {
+    return { payload: fallback, missingImageIds: [] };
+  }
+
+  const matchedIds = new Set();
+  const nextImages = (Array.isArray(fallback.images) ? fallback.images : []).map((img) => {
+    const id = String(img?.id || "");
+    const snap = targetById.get(id);
+    if (!snap) return img;
+    matchedIds.add(id);
+    return {
+      ...img,
+      name: String(snap?.name || img?.name || ""),
+      annotations: deepClone(Array.isArray(snap?.annotations) ? snap.annotations : [])
+    };
+  });
+
+  const missingImageIds = [];
+  targetById.forEach((_snap, id) => {
+    if (!matchedIds.has(String(id || ""))) {
+      missingImageIds.push(String(id || ""));
+    }
+  });
+
+  fallback.images = nextImages;
+  if (!fallback.selectedImageId || !nextImages.some((img) => img.id === fallback.selectedImageId)) {
+    fallback.selectedImageId = nextImages[0]?.id || null;
+  }
+  return { payload: fallback, missingImageIds };
+}
+
+function resolveVersionDiffCount(version, byId = null) {
+  const saved = Number(version?.diffCount || 0);
+  if (saved > 0) return saved;
+
+  const hasLegacyPair = Array.isArray(version?.baseSnapshot) || Array.isArray(version?.targetSnapshot);
+  let baseSnapshot = [];
+  let targetSnapshot = [];
+
+  if (hasLegacyPair) {
+    baseSnapshot = Array.isArray(version?.baseSnapshot) ? deepClone(version.baseSnapshot) : [];
+    targetSnapshot = Array.isArray(version?.targetSnapshot) ? deepClone(version.targetSnapshot) : [];
+  } else {
+    targetSnapshot = snapshotFromVersionRecord(version);
+    const previous = byId && version?.parentVersionId
+      ? byId.get(String(version.parentVersionId || ""))
+      : null;
+    baseSnapshot = previous ? snapshotFromVersionRecord(previous) : [];
+  }
+
+  return Object.keys(buildReviewDiffByImage(baseSnapshot, targetSnapshot, [])).length;
 }
 
 function exitVersionPreview() {
@@ -756,12 +915,17 @@ function restoreVersion(versionId) {
   if (!ok) return;
 
   const preservedReviewData = deepClone(state.reviewData);
-  applyBookData(version.snapshot || {});
+  const restoreResult = buildRestorePayloadFromVersion(version, state.reviewData.submissions);
+  applyBookData(restoreResult.payload || {});
   state.reviewData = normalizeReviewData(preservedReviewData);
   state.reviewData.activeVersionId = version.id;
   saveState({ wait: true, force: true });
   renderAll();
   closeVersionModal();
+
+  if (Array.isArray(restoreResult.missingImageIds) && restoreResult.missingImageIds.length > 0) {
+    alert(`已恢复该历史版本标注，但有 ${restoreResult.missingImageIds.length} 张历史图片在当前书籍中缺失，无法完整还原。`);
+  }
 }
 
 function getVersionMaps(submissions) {
@@ -821,7 +985,7 @@ function createVersionCard(item, role) {
   title.textContent = `版本 ${Number(item?.versionNo || 0)}`;
   const status = document.createElement("span");
   status.className = "version-item-status";
-  status.textContent = `变更页数 ${Number(item?.diffCount || 0)}`;
+  status.textContent = `变更页数 ${Number(item?._displayDiffCount || 0)}`;
   head.appendChild(title);
   head.appendChild(status);
 
@@ -867,6 +1031,10 @@ function createVersionCard(item, role) {
 }
 
 function openVersionModal() {
+  if (state.versionPreview.active) {
+    alert("请先退出此历史版本");
+    return;
+  }
   if (!el.versionModal || !el.versionList) return;
   el.versionList.innerHTML = "";
   const submissions = state.reviewData.submissions
@@ -884,6 +1052,9 @@ function openVersionModal() {
 
   const role = getCurrentBookRole();
   const { byId, children } = getVersionMaps(submissions);
+  submissions.forEach((item) => {
+    item._displayDiffCount = resolveVersionDiffCount(item, byId);
+  });
   const activePath = getActiveVersionPath(submissions, state.reviewData.activeVersionId);
 
   activePath.forEach((item, idx) => {
@@ -3515,6 +3686,8 @@ function collectCurrentBookData() {
 }
 
 function applyBookData(parsed) {
+  const rawSubmissions = Array.isArray(parsed?.reviewData?.submissions) ? parsed.reviewData.submissions : [];
+  const rawLegacyCount = countLegacySubmissionsWithoutFullSnapshot(rawSubmissions);
   state.versionPreview = {
     active: false,
     versionId: "",
@@ -3534,8 +3707,16 @@ function applyBookData(parsed) {
     ? parsed.glyphRegistry.map((item) => normalizeGlyphRegistryItem(item))
     : [];
   state.aiLayoutHints = normalizeAiLayoutHints(parsed.aiLayoutHints || {});
-  state.reviewData = normalizeReviewData(parsed.reviewData || {});
+  state.reviewData = normalizeReviewData(parsed.reviewData || {}, { seedPayload: parsed });
+  const normalizedLegacyCount = countLegacySubmissionsWithoutFullSnapshot(state.reviewData.submissions);
   if (getCurrentBookRole() === "editor") {
+    const uidText = String(collabState.user?.id || "");
+    if (uidText) {
+      const currentSnapshot = captureReviewSnapshot(state.images);
+      getEditorBaselineSnapshot(uidText, currentSnapshot);
+    }
+  }
+  if (getCurrentBookRole() === "owner") {
     const uidText = String(collabState.user?.id || "");
     if (uidText) {
       const currentSnapshot = captureReviewSnapshot(state.images);
@@ -3549,6 +3730,13 @@ function applyBookData(parsed) {
   ensureTemplateOrder();
   state.images.forEach((img, idx) => ensureImageMeta(img, idx));
   renderXmlHintInfo();
+
+  // Persist one-time migration from legacy targetSnapshot-only entries to full snapshot entries.
+  if (currentBookId && collabState.token && rawLegacyCount > normalizedLegacyCount) {
+    window.setTimeout(() => {
+      saveState({ force: true });
+    }, 0);
+  }
 }
 
 function createDefaultBookData() {
