@@ -24,6 +24,7 @@ let saveStateQueue = Promise.resolve();
 let saveStateDebounceTimer = null;
 let saveStateDebounceForce = false;
 const SAVE_STATE_DEBOUNCE_MS = 1200;
+const DRAW_UNDO_MAX_STEPS = 60;
 const lastSavedPayloadKeyByBook = new Map();
 let dbPromise = null;
 const collabState = {
@@ -104,6 +105,7 @@ const state = {
   glyphCreateActive: false,
   draftRect: null,
   pendingDrafts: [],
+  drawUndoStack: [],
   activeDraftTagId: null,
   activeMainPanel: "edit",
   activeRightPanel: "object",
@@ -205,6 +207,7 @@ const el = {
   drawState: document.getElementById("drawState"),
   startDrawBtn: document.getElementById("startDrawBtn"),
   clearDraftBtn: document.getElementById("clearDraftBtn"),
+  drawUndoBtn: document.getElementById("drawUndoBtn"),
   glyphCharInput: document.getElementById("glyphCharInput"),
   glyphManualCodepointInput: document.getElementById("glyphManualCodepointInput"),
   glyphIdsInput: document.getElementById("glyphIdsInput"),
@@ -1716,6 +1719,68 @@ function selectedAnno() {
   return img.annotations.find((anno) => anno.id === state.selectedAnnoId) || null;
 }
 
+function buildDrawUndoSnapshot(imageId = state.selectedImageId) {
+  const targetId = String(imageId || "").trim();
+  if (!targetId) return null;
+  const img = state.images.find((item) => item.id === targetId);
+  if (!img) return null;
+  return {
+    imageId: targetId,
+    annotations: deepClone(Array.isArray(img.annotations) ? img.annotations : []),
+    pendingDrafts: deepClone(Array.isArray(state.pendingDrafts) ? state.pendingDrafts : []),
+    draftRect: state.draftRect ? { ...state.draftRect } : null,
+    drawingActive: Boolean(state.drawingActive),
+    selectedAnnoId: String(state.selectedAnnoId || "")
+  };
+}
+
+function pushDrawUndoSnapshot(imageId = state.selectedImageId, preparedSnapshot = null) {
+  const snapshot = preparedSnapshot || buildDrawUndoSnapshot(imageId);
+  if (!snapshot) return;
+  const last = state.drawUndoStack[state.drawUndoStack.length - 1] || null;
+  const sameAsLast = last && JSON.stringify(last) === JSON.stringify(snapshot);
+  if (sameAsLast) return;
+  state.drawUndoStack.push(snapshot);
+  if (state.drawUndoStack.length > DRAW_UNDO_MAX_STEPS) {
+    state.drawUndoStack.splice(0, state.drawUndoStack.length - DRAW_UNDO_MAX_STEPS);
+  }
+}
+
+function pushDrawUndoSnapshotWithAnnoRect(imageId, annoId, rectBefore) {
+  const snapshot = buildDrawUndoSnapshot(imageId);
+  if (!snapshot) return;
+  snapshot.annotations = (snapshot.annotations || []).map((anno) => {
+    if (anno.id !== annoId) return anno;
+    return {
+      ...anno,
+      rect: { ...rectBefore }
+    };
+  });
+  pushDrawUndoSnapshot(imageId, snapshot);
+}
+
+function undoLastDrawAction() {
+  if (!ensureCanEdit("撤销上一步")) return;
+  const snapshot = state.drawUndoStack.pop();
+  if (!snapshot) return;
+  const img = state.images.find((item) => item.id === snapshot.imageId);
+  if (!img) {
+    renderAll();
+    return;
+  }
+
+  state.selectedImageId = snapshot.imageId;
+  img.annotations = deepClone(Array.isArray(snapshot.annotations) ? snapshot.annotations : []);
+  state.pendingDrafts = deepClone(Array.isArray(snapshot.pendingDrafts) ? snapshot.pendingDrafts : []);
+  state.draftRect = snapshot.draftRect ? { ...snapshot.draftRect } : null;
+  state.drawingActive = Boolean(snapshot.drawingActive);
+  state.glyphCreateActive = false;
+  const selectedId = String(snapshot.selectedAnnoId || "");
+  state.selectedAnnoId = selectedId && img.annotations.some((anno) => anno.id === selectedId) ? selectedId : null;
+  renderAll();
+  saveState();
+}
+
 function ensureTemplateOrder() {
   const parentGroups = new Map();
   state.templateTags.forEach((tag) => {
@@ -2705,6 +2770,7 @@ async function autoDrawLayoutByAI() {
     throw new Error(`自动画框失败：${overlapCheck.message}`);
   }
 
+  pushDrawUndoSnapshot(img.id);
   const { lastAnnoId } = appendDraftsToAnnotations(img, nonOverlapDrafts, { preferDraftText: true });
   state.selectedAnnoId = lastAnnoId;
   state.drawingActive = false;
@@ -3885,6 +3951,7 @@ function applyBookData(parsed) {
   state.glyphDraft = null;
   state.glyphCreateActive = false;
   state.pendingDrafts = [];
+  state.drawUndoStack = [];
   state.draftRect = null;
   ensureTemplateOrder();
   state.images.forEach((img, idx) => ensureImageMeta(img, idx));
@@ -4893,6 +4960,7 @@ function renderBoxes() {
       delBtn.title = "删除该框";
       delBtn.addEventListener("click", (evt) => {
         evt.stopPropagation();
+        pushDrawUndoSnapshot(img.id);
         const keep = img.annotations.filter((it) => it.id !== anno.id);
         img.annotations = keep;
         state.selectedAnnoId = null;
@@ -5098,14 +5166,19 @@ function renderEditMode() {
   if (state.versionPreview.active) {
     el.drawState.textContent = "版本差异查看中：可切换显示全部或仅显示新增/减少，编辑已禁用";
     el.startDrawBtn.textContent = "开始添加";
+    if (el.drawUndoBtn) el.drawUndoBtn.disabled = true;
     setDrawTextFieldsVisible(false);
     return;
   }
   if (!canEditCurrentBook()) {
     el.drawState.textContent = "当前为仅读权限，可查看方框与标签，不能编辑";
     el.startDrawBtn.textContent = "开始添加";
+    if (el.drawUndoBtn) el.drawUndoBtn.disabled = true;
     setDrawTextFieldsVisible(false);
     return;
+  }
+  if (el.drawUndoBtn) {
+    el.drawUndoBtn.disabled = state.drawUndoStack.length === 0;
   }
   setDrawTextFieldsVisible(drawTextFieldsEnabled());
   if (state.drawingActive) {
@@ -5406,6 +5479,7 @@ function syncEditorPermissionUi() {
     el.renameImageBtn,
     el.startDrawBtn,
     el.clearDraftBtn,
+    el.drawUndoBtn,
     el.saveAnnoBtn,
     el.saveCurrentPropsBtn,
     el.createDraftTagBtn,
@@ -5627,6 +5701,7 @@ function bindDrawEvents() {
         }
         const currentAttrId = String(resizeAnno.attrs?.id || "").trim();
         resizeAnno.parentAnnoId = findParentByIdOrContainment(img, resizeAnno.rect, resizeAnno.id, currentAttrId);
+        pushDrawUndoSnapshotWithAnnoRect(img.id, resizeAnno.id, resizeStartRect || resizeAnno.rect);
         const overlapAfterIds = getCoveredAnnoIds(img, resizeAnno.id, resizeAnno.rect);
         notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
         saveState();
@@ -5658,6 +5733,7 @@ function bindDrawEvents() {
         }
         const currentAttrId = String(movingAnno.attrs?.id || "").trim();
         movingAnno.parentAnnoId = findParentByIdOrContainment(img, movingAnno.rect, movingAnno.id, currentAttrId);
+        pushDrawUndoSnapshotWithAnnoRect(img.id, movingAnno.id, moveStartRect || movingAnno.rect);
         const overlapAfterIds = getCoveredAnnoIds(img, movingAnno.id, movingAnno.rect);
         notifyNewCoveredAnnos(overlapBeforeIds, overlapAfterIds);
         saveState();
@@ -5687,6 +5763,7 @@ function bindDrawEvents() {
       } else {
         const tag = findTemplateTag(state.activeDraftTagId);
         if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
+          pushDrawUndoSnapshot(img.id);
           const style = getTagStyle(tag) || {
             shape: "rect",
             color: el.annoColor.value,
@@ -6430,6 +6507,11 @@ function bindEvents() {
 
   el.clearDraftBtn.addEventListener("click", () => {
     if (!ensureCanEdit("清空草稿")) return;
+    const hasDraftState = Boolean(state.draftRect) || state.pendingDrafts.length > 0 || state.drawingActive;
+    if (hasDraftState) {
+      const img = selectedImage();
+      pushDrawUndoSnapshot(img?.id || state.selectedImageId);
+    }
     state.draftRect = null;
     state.pendingDrafts = [];
     state.drawingActive = false;
@@ -6437,6 +6519,12 @@ function bindEvents() {
     if (el.annoTranscription) el.annoTranscription.value = "";
     renderAll();
   });
+
+  if (el.drawUndoBtn) {
+    el.drawUndoBtn.addEventListener("click", () => {
+      undoLastDrawAction();
+    });
+  }
 
   el.annoColor.addEventListener("input", () => {
     if (!canEditCurrentBook()) return;
@@ -6493,6 +6581,8 @@ function bindEvents() {
     const textEnabled = drawTextFieldsEnabled();
     const draftTranscription = textEnabled ? String(el.annoTranscription?.value || "").trim() : "";
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
+
+    pushDrawUndoSnapshot(img.id);
 
     const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
       defaultTranscription: textEnabled ? draftTranscription : "",
