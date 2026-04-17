@@ -2279,8 +2279,9 @@ function glyphCollectedLabel(item) {
 
 function glyphDisplayText(item) {
   const official = normalizeCodepointInput(item?.officialCodepoint || "");
-  if (!official) return "未收录字形";
-  return String(item?.glyphChar || "").trim() || "已收录字形";
+  const glyphChar = String(item?.glyphChar || "").trim();
+  if (glyphChar) return glyphChar;
+  return official ? "已收录字形" : "未命名字形";
 }
 
 function normalizeGlyphRegistryItem(item) {
@@ -3372,9 +3373,27 @@ function renderGlyphHistoryList() {
     const row = document.createElement("div");
     row.className = "version-item";
 
+    const head = document.createElement("div");
+    head.className = "glyph-history-head";
+
+    const previewWrap = document.createElement("div");
+    previewWrap.className = "glyph-history-preview";
+    if (item.previewDataUrl) {
+      const previewImg = document.createElement("img");
+      previewImg.src = item.previewDataUrl;
+      previewImg.alt = `${glyphDisplayText(item)} 缩略图`;
+      previewWrap.appendChild(previewImg);
+    } else {
+      previewWrap.classList.add("empty");
+      previewWrap.textContent = glyphDisplayText(item);
+    }
+    head.appendChild(previewWrap);
+
     const text = document.createElement("div");
+    text.className = "glyph-history-main";
     text.textContent = `${glyphDisplayText(item)} -> ${item.codepoint} [${glyphCollectedLabel(item)}] (${item.imageName})`;
-    row.appendChild(text);
+    head.appendChild(text);
+    row.appendChild(head);
 
     const meta = document.createElement("div");
     meta.className = "version-item-status";

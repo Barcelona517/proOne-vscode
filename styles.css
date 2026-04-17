@@ -1076,6 +1076,41 @@ hr {
   gap: 6px;
 }
 
+.glyph-history-head {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.glyph-history-preview {
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #faf6ef;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.glyph-history-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.glyph-history-preview.empty {
+  font-size: 20px;
+  color: #7e5b2a;
+}
+
+.glyph-history-main {
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .version-item-head {
   display: flex;
   justify-content: space-between;
