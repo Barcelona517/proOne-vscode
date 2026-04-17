@@ -2853,6 +2853,23 @@ function clearGlyphInputFields() {
   if (el.glyphNoteInput) el.glyphNoteInput.value = "";
 }
 
+function syncGlyphCodepointFromExistingRecord() {
+  const glyphChar = String(el.glyphCharInput?.value || "").trim();
+  const simplified = toSimplifiedSingleChar(glyphChar);
+  const existing = findGlyphRegistryByChar(simplified);
+  if (!existing?.codepoint) return null;
+
+  const normalized = normalizeCodepointInput(existing.codepoint) || String(existing.codepoint).trim().toUpperCase();
+  if (el.glyphManualCodepointInput && normalized) {
+    el.glyphManualCodepointInput.value = normalized;
+  }
+  return {
+    glyphChar: simplified || glyphChar,
+    codepoint: normalized,
+    existing
+  };
+}
+
 function formatAccuracyLabel(confidence) {
   if (confidence == null || confidence === "") return "";
   const n = Number(confidence);
@@ -2869,6 +2886,7 @@ function createGlyphAnnoFromDraft() {
 
   const rect = { ...state.glyphDraft.rect };
   const glyphChar = (el.glyphCharInput?.value || "").trim();
+  const existingGlyph = syncGlyphCodepointFromExistingRecord();
 
   const codepoint = allocateGlyphCodepoint(glyphChar, el.glyphManualCodepointInput?.value || "");
   const charTag = ensureCharTemplateTag();
@@ -2902,22 +2920,30 @@ function createGlyphAnnoFromDraft() {
   img.annotations.push(anno);
 
   state.selectedAnnoId = anno.id;
-  state.glyphRegistry.unshift({
-    id: uid("glyph"),
-    glyphChar: glyphChar || "(未录字符)",
-    codepoint,
-    officialCodepoint: "",
-    collected: false,
-    collectedAt: "",
-    glyphIds: (el.glyphIdsInput?.value || "").trim(),
-    glyphNote: (el.glyphNoteInput?.value || "").trim(),
-    imageId: img.id,
-    imageName: img.name,
-    previewDataUrl: state.glyphDraft.previewDataUrl || "",
-    annoId: anno.id,
-    createdAt: new Date().toISOString()
-  });
-  state.glyphRegistry = state.glyphRegistry.slice(0, 200);
+  if (existingGlyph?.codepoint) {
+    anno.__skipPersist = true;
+    if (el.glyphCreateHint) {
+      el.glyphCreateHint.textContent = `该字已在造字记录中，已自动复用 unicode：${existingGlyph.codepoint}`;
+    }
+    alert(`该字已在造字记录中，已自动填入之前分配的 unicode：${existingGlyph.codepoint}`);
+  } else {
+    state.glyphRegistry.unshift({
+      id: uid("glyph"),
+      glyphChar: glyphChar || "(未录字符)",
+      codepoint,
+      officialCodepoint: "",
+      collected: false,
+      collectedAt: "",
+      glyphIds: (el.glyphIdsInput?.value || "").trim(),
+      glyphNote: (el.glyphNoteInput?.value || "").trim(),
+      imageId: img.id,
+      imageName: img.name,
+      previewDataUrl: state.glyphDraft.previewDataUrl || "",
+      annoId: anno.id,
+      createdAt: new Date().toISOString()
+    });
+    state.glyphRegistry = state.glyphRegistry.slice(0, 200);
+  }
 
   state.glyphDraft = null;
   return anno;
@@ -2925,6 +2951,9 @@ function createGlyphAnnoFromDraft() {
 
 async function persistGlyphRecordToServer(anno) {
   if (!anno) return;
+  if (anno.__skipPersist) {
+    return { skipped: true };
+  }
   const payload = {
     charGlyph: String(anno.attrs?.glyphChar || anno.transcription || "").trim(),
     manualCodepoint: String(anno.attrs?.codepoint || "").trim(),
@@ -2943,6 +2972,8 @@ async function persistGlyphRecordToServer(anno) {
     const msg = await res.text();
     throw new Error(msg || "写入数据库失败");
   }
+
+  return { skipped: false };
 }
 
 async function suggestGlyphByAI(signal) {
@@ -6553,17 +6584,29 @@ function bindEvents() {
       el.glyphAssignSaveBtn.textContent = "保存中...";
       try {
         const createdAnno = createGlyphAnnoFromDraft();
-        await persistGlyphRecordToServer(createdAnno);
+        const persistResult = await persistGlyphRecordToServer(createdAnno);
         renderAll();
         saveState();
         if (el.glyphCreateHint) {
-          el.glyphCreateHint.textContent = "已保存到本地和数据库";
+          el.glyphCreateHint.textContent = persistResult?.skipped
+            ? "该字已在造字记录中，已复用历史 unicode"
+            : "已保存到本地和数据库";
         }
       } catch (err) {
         alert(err?.message || "保存造字失败");
       } finally {
         el.glyphAssignSaveBtn.disabled = false;
         el.glyphAssignSaveBtn.textContent = original;
+      }
+    });
+  }
+
+  if (el.glyphCharInput) {
+    el.glyphCharInput.addEventListener("change", () => {
+      const matched = syncGlyphCodepointFromExistingRecord();
+      if (!matched?.codepoint) return;
+      if (el.glyphCreateHint) {
+        el.glyphCreateHint.textContent = `该字已在造字记录中，已自动填入 unicode：${matched.codepoint}`;
       }
     });
   }
