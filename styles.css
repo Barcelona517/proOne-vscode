@@ -788,6 +788,10 @@ button.primary {
   grid-template-columns: 1fr;
 }
 
+.draw-actions-row {
+  grid-template-columns: 2fr 1fr 1fr;
+}
+
 .single-bottom-gap {
   margin-bottom: 8px;
 }
