@@ -1773,6 +1773,21 @@ function pushDrawUndoSnapshotWithAnnoRect(imageId, annoId, rectBefore) {
 
 function undoLastDrawAction() {
   if (!ensureCanEdit("撤销上一步")) return;
+
+  const currentImg = selectedImage();
+  if (currentImg && state.pendingDrafts.length > 0) {
+    state.pendingDrafts.pop();
+    state.draftRect = null;
+    const top = state.drawUndoStack[state.drawUndoStack.length - 1] || null;
+    if (top && top.imageId === currentImg.id && top.undoKind === "draft-add") {
+      state.drawUndoStack.pop();
+    }
+    renderAll();
+    saveState();
+    showDrawActionHint("已撤销上一步");
+    return;
+  }
+
   const snapshot = state.drawUndoStack.pop();
   if (!snapshot) {
     showDrawActionHint("暂无可撤销操作");
