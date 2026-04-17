@@ -3436,16 +3436,22 @@ function syncStyleForSameTagAnnos(sourceAnno, shapeOrBorderStyle, color, borderW
   const sourceTagId = String(sourceAnno.tagId || "").trim();
   const sourceTagPath = String(sourceAnno.tagPath || "").trim();
   const sourceTagName = String(sourceAnno.tagName || "").trim();
+  const sourceAnnoId = String(sourceAnno.id || "").trim();
+
+  const isSameTag = (anno) => {
+    const annoTagId = String(anno?.tagId || "").trim();
+    const annoTagPath = String(anno?.tagPath || "").trim();
+    const annoTagName = String(anno?.tagName || "").trim();
+    const annoId = String(anno?.id || "").trim();
+    if (sourceTagId) return annoTagId === sourceTagId;
+    if (sourceTagPath) return annoTagPath === sourceTagPath;
+    if (sourceTagName) return annoTagName === sourceTagName;
+    return sourceAnnoId ? annoId === sourceAnnoId : false;
+  };
 
   state.images.forEach((img) => {
     (img.annotations || []).forEach((anno) => {
-      const annoTagId = String(anno.tagId || "").trim();
-      const annoTagPath = String(anno.tagPath || "").trim();
-      const annoTagName = String(anno.tagName || "").trim();
-      const sameTag = sourceTagId
-        ? annoTagId === sourceTagId
-        : (sourceTagPath ? annoTagPath === sourceTagPath : annoTagName === sourceTagName);
-      if (!sameTag) return;
+      if (!isSameTag(anno)) return;
       anno.shape = nextShape;
       anno.color = nextColor;
       anno.borderStyle = nextBorderStyle;
