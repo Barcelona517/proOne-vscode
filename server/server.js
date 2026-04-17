@@ -651,7 +651,11 @@ app.post("/api/layout/suggest", async (req, res) => {
 
       const hasSent = categories.some((item) => item.name.toLowerCase() === "sent");
       const hasSnt = categories.some((item) => item.name.toLowerCase() === "snt");
-      const sentenceMode = hasSent || hasSnt;
+      const sentenceLikeCount = categories.filter((item) => {
+        const n = item.name.toLowerCase();
+        return n === "sent" || n === "snt" || n === "sentence";
+      }).length;
+      const sentenceMode = sentenceLikeCount > 0 && sentenceLikeCount === categories.length;
 
     const promptLines = [
       "你是古籍版面结构识别助手。",
@@ -666,7 +670,8 @@ app.post("/api/layout/suggest", async (req, res) => {
       "2) x,y,w,h 为 0~1 的归一化坐标；",
       "3) 只返回明显区域，不要输出太碎的小块；",
       "4) 无法识别时返回 detections 空数组。",
-      "5) 同一标签的框严禁重合（同一 tagName 的任意两框交叠面积必须为 0）；不同标签允许重合。"
+      "5) 同一标签的框严禁重合（同一 tagName 的任意两框交叠面积必须为 0）；不同标签允许重合。",
+      "6) 对不同语义区域应优先使用不同标签，不要把所有框都标成同一种标签。"
     ];
 
     if (xmlHintLines.length > 0) {

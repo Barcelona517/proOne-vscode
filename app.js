@@ -2598,14 +2598,6 @@ function getAutoLayoutTargetTags() {
     path: templatePath(tag.id),
     style: getTagStyle(tag) || { shape: "rect", color: "#2e6f86", borderStyle: "solid", borderWidth: 2 }
   })).filter((tag) => tag.name);
-
-  const sentLike = mapped.filter((tag) => {
-    const n = tag.name.toLowerCase();
-    return n === "sent" || n === "snt" || n === "sentence";
-  });
-
-  // If sentence-level tags exist, prioritize sentence mode for auto punctuation.
-  if (sentLike.length > 0) return sentLike;
   return mapped;
 }
 
