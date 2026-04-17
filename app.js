@@ -2839,8 +2839,7 @@ async function autoDrawLayoutByAI(signal) {
     throw new Error(`自动画框失败：${overlapCheck.message}`);
   }
 
-  pushDrawUndoSnapshot(img.id);
-  const { lastAnnoId } = appendDraftsToAnnotations(img, nonOverlapDrafts, { preferDraftText: true });
+  const { lastAnnoId } = appendDraftsWithStepUndo(img, nonOverlapDrafts, { preferDraftText: true });
   state.selectedAnnoId = lastAnnoId;
   state.drawingActive = false;
   state.glyphCreateActive = false;
@@ -3599,6 +3598,29 @@ function appendDraftsToAnnotations(img, drafts, options = {}) {
     anno.parentAnnoId = findParentByIdOrContainment(img, anno.rect, anno.id, idValue);
     img.annotations.push(anno);
     lastAnnoId = anno.id;
+  });
+
+  return { lastAnnoId };
+}
+
+function appendDraftsWithStepUndo(img, drafts, options = {}) {
+  const items = Array.isArray(drafts) ? drafts : [];
+  let lastAnnoId = null;
+
+  items.forEach((draftItem) => {
+    const stepSnapshot = buildDrawUndoSnapshot(img?.id);
+    if (stepSnapshot) {
+      stepSnapshot.pendingDrafts = [];
+      stepSnapshot.draftRect = null;
+      stepSnapshot.drawingActive = false;
+      stepSnapshot.undoKind = "save-apply";
+      pushDrawUndoSnapshot(img.id, stepSnapshot, "save-apply");
+    }
+
+    const result = appendDraftsToAnnotations(img, [draftItem], options);
+    if (result?.lastAnnoId) {
+      lastAnnoId = result.lastAnnoId;
+    }
   });
 
   return { lastAnnoId };
@@ -6833,16 +6855,7 @@ function bindEvents() {
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
     pruneTrailingDraftUndoSnapshots(img.id);
-    const saveSnapshot = buildDrawUndoSnapshot(img.id);
-    if (saveSnapshot) {
-      saveSnapshot.pendingDrafts = [];
-      saveSnapshot.draftRect = null;
-      saveSnapshot.drawingActive = false;
-      saveSnapshot.undoKind = "save-apply";
-      pushDrawUndoSnapshot(img.id, saveSnapshot, "save-apply");
-    }
-
-    const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
+    const { lastAnnoId } = appendDraftsWithStepUndo(img, state.pendingDrafts, {
       defaultTranscription: textEnabled ? draftTranscription : "",
       defaultMeaning: textEnabled ? draftMeaning : "",
       preferDraftText: false
