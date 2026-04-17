@@ -26,6 +26,12 @@ let saveStateDebounceForce = false;
 const SAVE_STATE_DEBOUNCE_MS = 1200;
 const DRAW_UNDO_MAX_STEPS = 60;
 const lastSavedPayloadKeyByBook = new Map();
+const aiTaskControllers = {
+  autoDraw: null,
+  glyphSuggest: null,
+  annoSuggest: null,
+  meaningSuggest: null
+};
 let dbPromise = null;
 const collabState = {
   token: String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim(),
@@ -2711,7 +2717,7 @@ function getAutoLayoutTargetTags() {
   return mapped;
 }
 
-async function autoDrawLayoutByAI() {
+async function autoDrawLayoutByAI(signal) {
   const img = selectedImage();
   if (!img) {
     throw new Error("请先选择图片");
@@ -2737,7 +2743,8 @@ async function autoDrawLayoutByAI() {
   const res = await fetch(`${API_BASE}/api/layout/suggest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   });
 
   if (!res.ok) {
@@ -2922,7 +2929,7 @@ async function persistGlyphRecordToServer(anno) {
   }
 }
 
-async function suggestGlyphByAI() {
+async function suggestGlyphByAI(signal) {
   if (!state.glyphDraft?.previewDataUrl) {
     throw new Error("请先框选字图后再自动识别");
   }
@@ -2939,7 +2946,8 @@ async function suggestGlyphByAI() {
   const res = await fetch(`${API_BASE}/api/glyphs/suggest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   });
 
   if (!res.ok) {
@@ -2995,7 +3003,7 @@ function getTranscriptionTargetRect() {
   return null;
 }
 
-async function suggestTranscriptionByAI() {
+async function suggestTranscriptionByAI(signal) {
   const rect = getTranscriptionTargetRect();
   if (!rect) {
     throw new Error("请先框选一个区域后再识别简体");
@@ -3006,18 +3014,19 @@ async function suggestTranscriptionByAI() {
     throw new Error("无法获取框选字图");
   }
 
-  const transcription = await requestTranscriptionSuggestion(imageDataUrl);
+  const transcription = await requestTranscriptionSuggestion(imageDataUrl, signal);
   if (el.annoTranscription) {
     el.annoTranscription.value = transcription;
   }
 }
 
-async function requestTranscriptionSuggestion(imageDataUrl) {
+async function requestTranscriptionSuggestion(imageDataUrl, signal) {
   const payload = { imageDataUrl };
   const res = await fetch(`${API_BASE}/api/transcription/suggest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   });
 
   if (!res.ok) {
@@ -3034,7 +3043,7 @@ async function requestTranscriptionSuggestion(imageDataUrl) {
   return transcription;
 }
 
-async function suggestAttributeMeaning(attrName, attrValue, tagPath, transcription) {
+async function suggestAttributeMeaning(attrName, attrValue, tagPath, transcription, signal) {
   const payload = {
     attrName: String(attrName || "").trim(),
     attrValue: String(attrValue || "").trim(),
@@ -3052,7 +3061,8 @@ async function suggestAttributeMeaning(attrName, attrValue, tagPath, transcripti
   const res = await fetch(`${API_BASE}/api/attrs/meaning`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal
   });
 
   if (!res.ok) {
@@ -6260,17 +6270,28 @@ function bindEvents() {
 
   if (el.autoDrawByAiBtn) {
     el.autoDrawByAiBtn.addEventListener("click", async () => {
+      pulseActionButton(el.autoDrawByAiBtn);
+      if (aiTaskControllers.autoDraw) {
+        aiTaskControllers.autoDraw.abort();
+        return;
+      }
+
       const original = el.autoDrawByAiBtn.textContent;
-      el.autoDrawByAiBtn.disabled = true;
-      el.autoDrawByAiBtn.textContent = "识别中";
+      const controller = new AbortController();
+      aiTaskControllers.autoDraw = controller;
+      el.autoDrawByAiBtn.textContent = "取消识别";
       try {
-        await autoDrawLayoutByAI();
+        await autoDrawLayoutByAI(controller.signal);
         renderAll();
         saveState();
       } catch (err) {
+        if (err?.name === "AbortError") {
+          showDrawActionHint("已取消自动画框");
+          return;
+        }
         alert(err?.message || "自动画框失败");
       } finally {
-        el.autoDrawByAiBtn.disabled = false;
+        aiTaskControllers.autoDraw = null;
         el.autoDrawByAiBtn.textContent = original;
       }
     });
@@ -6426,15 +6447,26 @@ function bindEvents() {
 
   if (el.glyphAutoSuggestBtn) {
     el.glyphAutoSuggestBtn.addEventListener("click", async () => {
+      pulseActionButton(el.glyphAutoSuggestBtn);
+      if (aiTaskControllers.glyphSuggest) {
+        aiTaskControllers.glyphSuggest.abort();
+        return;
+      }
+
       const original = el.glyphAutoSuggestBtn.textContent;
-      el.glyphAutoSuggestBtn.disabled = true;
-      el.glyphAutoSuggestBtn.textContent = "识别中...";
+      const controller = new AbortController();
+      aiTaskControllers.glyphSuggest = controller;
+      el.glyphAutoSuggestBtn.textContent = "取消识别";
       try {
-        await suggestGlyphByAI();
+        await suggestGlyphByAI(controller.signal);
       } catch (err) {
+        if (err?.name === "AbortError") {
+          if (el.glyphCreateHint) el.glyphCreateHint.textContent = "已取消自动识别";
+          return;
+        }
         alert(err?.message || "自动识别失败");
       } finally {
-        el.glyphAutoSuggestBtn.disabled = false;
+        aiTaskControllers.glyphSuggest = null;
         el.glyphAutoSuggestBtn.textContent = original;
       }
     });
@@ -6474,15 +6506,26 @@ function bindEvents() {
 
   if (el.annoAutoSuggestBtn) {
     el.annoAutoSuggestBtn.addEventListener("click", async () => {
+      pulseActionButton(el.annoAutoSuggestBtn);
+      if (aiTaskControllers.annoSuggest) {
+        aiTaskControllers.annoSuggest.abort();
+        return;
+      }
+
       const original = el.annoAutoSuggestBtn.textContent;
-      el.annoAutoSuggestBtn.disabled = true;
-      el.annoAutoSuggestBtn.textContent = "识别中";
+      const controller = new AbortController();
+      aiTaskControllers.annoSuggest = controller;
+      el.annoAutoSuggestBtn.textContent = "取消识别";
       try {
-        await suggestTranscriptionByAI();
+        await suggestTranscriptionByAI(controller.signal);
       } catch (err) {
+        if (err?.name === "AbortError") {
+          showDrawActionHint("已取消简体识别");
+          return;
+        }
         alert(err?.message || "自动识别失败");
       } finally {
-        el.annoAutoSuggestBtn.disabled = false;
+        aiTaskControllers.annoSuggest = null;
         el.annoAutoSuggestBtn.textContent = original;
       }
     });
@@ -6490,6 +6533,12 @@ function bindEvents() {
 
   if (el.propMeaningAutoTranslateBtn) {
     el.propMeaningAutoTranslateBtn.addEventListener("click", async () => {
+      pulseActionButton(el.propMeaningAutoTranslateBtn);
+      if (aiTaskControllers.meaningSuggest) {
+        aiTaskControllers.meaningSuggest.abort();
+        return;
+      }
+
       const anno = selectedAnno();
       if (!anno) {
         alert("请先选中一个框");
@@ -6501,28 +6550,34 @@ function bindEvents() {
       }
 
       const original = el.propMeaningAutoTranslateBtn.textContent;
-      el.propMeaningAutoTranslateBtn.disabled = true;
-      el.propMeaningAutoTranslateBtn.textContent = "翻译中...";
+      const controller = new AbortController();
+      aiTaskControllers.meaningSuggest = controller;
+      el.propMeaningAutoTranslateBtn.textContent = "取消翻译";
       try {
         const imageDataUrl = cropRectToDataUrl(anno.rect);
         if (!imageDataUrl) {
           throw new Error("无法读取当前框对应图片");
         }
-        const sourceText = await requestTranscriptionSuggestion(imageDataUrl);
+        const sourceText = await requestTranscriptionSuggestion(imageDataUrl, controller.signal);
         if (el.propNote) el.propNote.value = sourceText;
         const meaning = await suggestAttributeMeaning(
           "meaning",
           sourceText,
           anno.tagPath,
-          sourceText
+          sourceText,
+          controller.signal
         );
         if (el.propMeaning) {
           el.propMeaning.value = meaning;
         }
       } catch (err) {
+        if (err?.name === "AbortError") {
+          showDrawActionHint("已取消自动翻译");
+          return;
+        }
         alert(err?.message || "自动翻译失败");
       } finally {
-        el.propMeaningAutoTranslateBtn.disabled = false;
+        aiTaskControllers.meaningSuggest = null;
         el.propMeaningAutoTranslateBtn.textContent = original;
       }
     });
