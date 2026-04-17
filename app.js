@@ -2280,8 +2280,8 @@ function glyphCollectedLabel(item) {
 function glyphDisplayText(item) {
   const official = normalizeCodepointInput(item?.officialCodepoint || "");
   const glyphChar = String(item?.glyphChar || "").trim();
-  if (glyphChar) return glyphChar;
-  return official ? "已收录字形" : "未命名字形";
+  if (official && glyphChar) return glyphChar;
+  return official ? "已收录字形" : "未收录字形";
 }
 
 function normalizeGlyphRegistryItem(item) {
@@ -3381,11 +3381,11 @@ function renderGlyphHistoryList() {
     if (item.previewDataUrl) {
       const previewImg = document.createElement("img");
       previewImg.src = item.previewDataUrl;
-      previewImg.alt = `${glyphDisplayText(item)} 缩略图`;
+      previewImg.alt = "字形缩略图";
       previewWrap.appendChild(previewImg);
     } else {
       previewWrap.classList.add("empty");
-      previewWrap.textContent = glyphDisplayText(item);
+      previewWrap.textContent = "图";
     }
     head.appendChild(previewWrap);
 
