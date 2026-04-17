@@ -472,9 +472,12 @@ function hasFullVersionSnapshot(version) {
 
 function clonePayloadForVersionSnapshot(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
+  const safeTemplateTags = Array.isArray(source.templateTags) && source.templateTags.length > 0
+    ? deepClone(source.templateTags)
+    : deepClone(templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 })));
   return {
     images: Array.isArray(source.images) ? deepClone(source.images) : [],
-    templateTags: Array.isArray(source.templateTags) ? deepClone(source.templateTags) : deepClone(templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }))),
+    templateTags: safeTemplateTags,
     selectedImageId: source.selectedImageId || null,
     selectedTemplateTagId: source.selectedTemplateTagId || templateDefaults[0]?.id || null,
     activeMainPanel: source.activeMainPanel || "edit",
@@ -1847,6 +1850,7 @@ async function extractHintFromFile(file) {
   if (isXml) {
     const text = await file.text();
     const xmlHint = extractXmlHintFromText(text, fileName);
+    const templateTags = parseTemplateTreeFromXmlText(text, fileName);
     const summaryText = [
       xmlHint.tags.length ? `标签: ${xmlHint.tags.join(",")}` : "",
       xmlHint.paths.length ? `路径样例: ${xmlHint.paths.slice(0, 12).join(" | ")}` : ""
@@ -1854,7 +1858,8 @@ async function extractHintFromFile(file) {
     return {
       ...xmlHint,
       fileType: "xml",
-      summaryText
+      summaryText,
+      templateTags
     };
   }
 
@@ -1910,6 +1915,91 @@ function extractXmlHintFromText(xmlText, fileName) {
   };
 }
 
+function parseTemplateTreeFromXmlText(xmlText, fileName) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, "application/xml");
+  const parseErr = doc.querySelector("parsererror");
+  if (parseErr) {
+    throw new Error(`XML 解析失败: ${fileName}`);
+  }
+
+  const result = [];
+  const pushTag = (name, parentId, attrs = []) => {
+    const tagName = String(name || "").trim();
+    if (!tagName) return "";
+    const id = uid("xml_tag");
+    result.push({
+      id,
+      name: tagName,
+      parentId,
+      attrs: Array.from(new Set((attrs || []).map((x) => String(x || "").trim()).filter(Boolean))),
+      order: result.length + 1
+    });
+    return id;
+  };
+
+  const templateRoots = Array.from(doc.querySelectorAll("template > tag"))
+    .filter((node) => node.parentElement?.tagName === "template");
+  if (templateRoots.length > 0) {
+    const walkTemplate = (node, parentId = null) => {
+      const name = String(node.getAttribute("name") || "").trim();
+      const attrs = String(node.getAttribute("attrs") || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const id = pushTag(name, parentId, attrs);
+      if (!id) return;
+      Array.from(node.children)
+        .filter((child) => child.tagName === "tag")
+        .forEach((child) => walkTemplate(child, id));
+    };
+    templateRoots.forEach((node) => walkTemplate(node, null));
+    return result.slice(0, 300);
+  }
+
+  const keyToAttrs = new Map();
+  const childrenByKey = new Map();
+  const nodeKey = (name, parentKey) => `${parentKey || "ROOT"}>${name}`;
+
+  const visit = (node, parentKey = null) => {
+    if (!(node instanceof Element)) return;
+    const name = String(node.tagName || "").trim();
+    if (!name) return;
+    const key = nodeKey(name, parentKey);
+
+    if (!keyToAttrs.has(key)) keyToAttrs.set(key, new Set());
+    Array.from(node.attributes || []).forEach((attr) => {
+      const attrName = String(attr?.name || "").trim();
+      if (attrName) keyToAttrs.get(key).add(attrName);
+    });
+
+    const parentMapKey = parentKey || "ROOT";
+    if (!childrenByKey.has(parentMapKey)) childrenByKey.set(parentMapKey, []);
+    if (!childrenByKey.get(parentMapKey).includes(key)) {
+      childrenByKey.get(parentMapKey).push(key);
+    }
+
+    Array.from(node.children || []).forEach((child) => visit(child, key));
+  };
+
+  if (doc.documentElement) {
+    visit(doc.documentElement, null);
+  }
+
+  const build = (parentKey = null, parentId = null) => {
+    const list = childrenByKey.get(parentKey || "ROOT") || [];
+    list.forEach((key) => {
+      const name = key.split(">").pop() || "";
+      const attrs = Array.from(keyToAttrs.get(key) || []);
+      const id = pushTag(name, parentId, attrs);
+      if (id) build(key, id);
+    });
+  };
+
+  build(null, null);
+  return result.slice(0, 300);
+}
+
 async function ingestXmlHintFiles(fileList) {
   const files = Array.from(fileList || []);
   if (files.length === 0) {
@@ -1919,10 +2009,14 @@ async function ingestXmlHintFiles(fileList) {
   const current = normalizeAiLayoutHints(state.aiLayoutHints);
   const mapByName = new Map(current.examples.map((item) => [item.fileName, item]));
   const enabledSet = new Set(current.activeFileNames);
+  let latestTemplateTags = null;
   for (const file of files) {
     const hint = await extractHintFromFile(file);
     mapByName.set(hint.fileName, { ...hint, enabled: true });
     enabledSet.add(hint.fileName);
+    if (Array.isArray(hint.templateTags) && hint.templateTags.length > 0) {
+      latestTemplateTags = hint.templateTags;
+    }
   }
   state.aiLayoutHints = {
     examples: Array.from(mapByName.values()).slice(-10),
@@ -1930,6 +2024,15 @@ async function ingestXmlHintFiles(fileList) {
     updatedAt: new Date().toISOString()
   };
   state.aiLayoutHints = normalizeAiLayoutHints(state.aiLayoutHints);
+
+  if (Array.isArray(latestTemplateTags) && latestTemplateTags.length > 0) {
+    state.templateTags = latestTemplateTags;
+    if (!state.selectedTemplateTagId || !state.templateTags.some((tag) => tag.id === state.selectedTemplateTagId)) {
+      state.selectedTemplateTagId = state.templateTags[0]?.id || null;
+    }
+    state.activeDraftTagId = state.selectedTemplateTagId || state.activeDraftTagId;
+    ensureTemplateOrder();
+  }
 }
 
 function buildXmlHintLinesForPrompt() {
@@ -3698,7 +3801,9 @@ function applyBookData(parsed) {
     baseByImage: {}
   };
   state.images = Array.isArray(parsed.images) ? parsed.images : [];
-  state.templateTags = Array.isArray(parsed.templateTags) ? parsed.templateTags : [];
+  state.templateTags = (Array.isArray(parsed.templateTags) && parsed.templateTags.length > 0)
+    ? parsed.templateTags
+    : templateDefaults.map((tag, idx) => ({ ...tag, order: idx + 1 }));
   state.selectedImageId = parsed.selectedImageId || state.images[0]?.id || null;
   state.selectedTemplateTagId = parsed.selectedTemplateTagId || state.templateTags[0]?.id || null;
   state.activeMainPanel = parsed.activeMainPanel || "edit";
@@ -5925,6 +6030,7 @@ function bindEvents() {
           await ingestXmlHintFiles(files);
           renderXmlHintsModalList();
           renderXmlHintInfo();
+          renderAll();
           await saveState();
         })
         .catch((err) => {
