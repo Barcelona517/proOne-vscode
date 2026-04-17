@@ -687,6 +687,21 @@ function hasUnsubmittedEditorChanges() {
   return Object.keys(diff).length > 0;
 }
 
+function hasBlockingUnsubmittedChangesForBack() {
+  if (!hasUnsubmittedEditorChanges()) return false;
+
+  const currentSnapshot = captureReviewSnapshot(state.images);
+  const submissions = Array.isArray(state.reviewData.submissions) ? state.reviewData.submissions : [];
+  const activeVersionId = String(state.reviewData.activeVersionId || "");
+  const activeVersion = submissions.find((item) => String(item?.id || "") === activeVersionId) || null;
+  const fallbackSnapshot = Array.isArray(state.reviewData.lastApprovedSnapshot)
+    ? deepClone(state.reviewData.lastApprovedSnapshot)
+    : [];
+  const activeSnapshot = activeVersion ? snapshotFromVersionRecord(activeVersion) : fallbackSnapshot;
+  const diffAgainstActive = buildReviewDiffByImage(activeSnapshot, currentSnapshot, []);
+  return Object.keys(diffAgainstActive).length > 0;
+}
+
 function submitCurrentChangesForReview() {
   const role = getCurrentBookRole();
   if (!(role === "editor" || role === "owner")) {
@@ -5776,7 +5791,7 @@ function bindEvents() {
 
   if (el.backToLibraryBtn) {
     el.backToLibraryBtn.addEventListener("click", async () => {
-      if (hasUnsubmittedEditorChanges()) {
+      if (hasBlockingUnsubmittedChangesForBack()) {
         alert("请先提交改动");
         return;
       }
