@@ -6325,7 +6325,19 @@ function bindEvents() {
 
   el.startDrawBtn.addEventListener("click", () => {
     if (!ensureCanEdit("新增方框")) return;
+    if (!state.activeDraftTagId || !findTemplateTag(state.activeDraftTagId)) {
+      const fallbackTag = getTemplateTagsFromDepth(3)[0] || state.templateTags[0] || null;
+      if (fallbackTag) {
+        state.activeDraftTagId = fallbackTag.id;
+      }
+    }
+
     const activeTag = findTemplateTag(state.activeDraftTagId);
+    if (!activeTag) {
+      alert("请先在标签树中选择一个标签后再画框");
+      renderAll();
+      return;
+    }
     const activeStyle = activeTag ? getTagStyle(activeTag) : null;
     if (!state.drawingActive && !state.glyphCreateActive && (!activeStyle || !activeStyle.color)) {
       alert("请先选择颜色");
