@@ -352,6 +352,29 @@
     </div>
   </div>
 
+  <div id="imageEditModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="imageEditModalTitle">
+    <div class="modal-card image-edit-modal-card">
+      <div id="imageEditModalTitle" class="section-title">编辑图片</div>
+      <div class="image-edit-grid">
+        <section class="image-edit-col">
+          <label>名称
+            <input id="imageEditNameInput" type="text" placeholder="输入名称" />
+          </label>
+          <button id="imageEditNameSaveBtn" class="primary" type="button">保存名称</button>
+        </section>
+        <section class="image-edit-col">
+          <label>ID
+            <input id="imageEditIdInput" type="text" placeholder="输入ID" />
+          </label>
+          <button id="imageEditIdSaveBtn" class="primary" type="button">保存ID</button>
+        </section>
+      </div>
+      <div class="xml-hints-footer">
+        <button id="imageEditModalCloseBtn" class="mini-btn" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="./app.js"></script>

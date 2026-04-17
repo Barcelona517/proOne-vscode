@@ -241,6 +241,12 @@ const el = {
   versionModal: document.getElementById("versionModal"),
   versionList: document.getElementById("versionList"),
   versionModalCloseBtn: document.getElementById("versionModalCloseBtn"),
+  imageEditModal: document.getElementById("imageEditModal"),
+  imageEditNameInput: document.getElementById("imageEditNameInput"),
+  imageEditNameSaveBtn: document.getElementById("imageEditNameSaveBtn"),
+  imageEditIdInput: document.getElementById("imageEditIdInput"),
+  imageEditIdSaveBtn: document.getElementById("imageEditIdSaveBtn"),
+  imageEditModalCloseBtn: document.getElementById("imageEditModalCloseBtn"),
   annoTranscriptionRow: document.getElementById("annoTranscriptionRow"),
   annoTranscription: document.getElementById("annoTranscription"),
   annoMeaningRow: document.getElementById("annoMeaningRow"),
@@ -4646,6 +4652,7 @@ function renderMainImage() {
   const img = selectedImage();
   if (!img) {
     state.renamingImage = false;
+    closeImageEditModal();
     el.mainImage.removeAttribute("src");
     el.viewerTitle.textContent = "未选择图片";
     if (el.viewerTitle) el.viewerTitle.classList.remove("hidden");
@@ -4675,27 +4682,70 @@ function startRenameSelectedImage() {
     return;
   }
 
-  const nextNameInput = window.prompt("请输入图片名称", String(img.name || ""));
-  if (nextNameInput == null) return;
-  const nextName = String(nextNameInput || "").trim();
+  openImageEditModal(img);
+}
+
+function openImageEditModal(img) {
+  if (!el.imageEditModal) return;
+  const target = img || selectedImage();
+  if (!target) return;
+  if (el.imageEditNameInput) {
+    el.imageEditNameInput.value = String(target.name || "");
+  }
+  if (el.imageEditIdInput) {
+    el.imageEditIdInput.value = String(target.meta?.id || "");
+  }
+  el.imageEditModal.classList.remove("hidden");
+  if (el.imageEditNameInput) {
+    el.imageEditNameInput.focus();
+    el.imageEditNameInput.select();
+  }
+}
+
+function closeImageEditModal() {
+  if (!el.imageEditModal) return;
+  el.imageEditModal.classList.add("hidden");
+}
+
+function saveSelectedImageNameFromModal() {
+  if (!ensureCanEdit("编辑图片名称")) return;
+  const img = selectedImage();
+  if (!img) {
+    alert("请先选择图片");
+    return;
+  }
+  const nextName = String(el.imageEditNameInput?.value || "").trim();
   if (!nextName) {
     alert("图片名称不能为空");
+    if (el.imageEditNameInput) {
+      el.imageEditNameInput.focus();
+      el.imageEditNameInput.select();
+    }
     return;
   }
+  img.name = nextName;
+  renderAll();
+  saveState();
+}
 
-  const currentId = String(img.meta?.id || "").trim();
-  const nextIdInput = window.prompt("请输入图片ID", currentId);
-  if (nextIdInput == null) return;
-  const nextId = String(nextIdInput || "").trim();
+function saveSelectedImageIdFromModal() {
+  if (!ensureCanEdit("编辑图片ID")) return;
+  const img = selectedImage();
+  if (!img) {
+    alert("请先选择图片");
+    return;
+  }
+  const nextId = String(el.imageEditIdInput?.value || "").trim();
   if (!nextId) {
     alert("图片ID不能为空");
+    if (el.imageEditIdInput) {
+      el.imageEditIdInput.focus();
+      el.imageEditIdInput.select();
+    }
     return;
   }
-
-  img.name = nextName;
   img.meta = img.meta || {};
   img.meta.id = nextId;
-  state.renamingImage = false;
   renderAll();
   saveState();
 }
@@ -5980,6 +6030,50 @@ function bindEvents() {
     });
   }
 
+  if (el.imageEditNameSaveBtn) {
+    el.imageEditNameSaveBtn.addEventListener("click", () => {
+      saveSelectedImageNameFromModal();
+    });
+  }
+
+  if (el.imageEditIdSaveBtn) {
+    el.imageEditIdSaveBtn.addEventListener("click", () => {
+      saveSelectedImageIdFromModal();
+    });
+  }
+
+  if (el.imageEditNameInput) {
+    el.imageEditNameInput.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        saveSelectedImageNameFromModal();
+      }
+    });
+  }
+
+  if (el.imageEditIdInput) {
+    el.imageEditIdInput.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        saveSelectedImageIdFromModal();
+      }
+    });
+  }
+
+  if (el.imageEditModalCloseBtn) {
+    el.imageEditModalCloseBtn.addEventListener("click", () => {
+      closeImageEditModal();
+    });
+  }
+
+  if (el.imageEditModal) {
+    el.imageEditModal.addEventListener("click", (evt) => {
+      if (evt.target === el.imageEditModal) {
+        closeImageEditModal();
+      }
+    });
+  }
+
   if (el.viewerTitleInput) {
     el.viewerTitleInput.addEventListener("keydown", (evt) => {
       if (evt.key === "Enter") {
@@ -6038,6 +6132,7 @@ function bindEvents() {
       closeXmlHintsModal();
       closeCollabMembersModal();
       closeVersionModal();
+      closeImageEditModal();
     }
   });
 

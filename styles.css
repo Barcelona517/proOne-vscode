@@ -974,6 +974,32 @@ hr {
   width: min(640px, calc(100vw - 24px));
 }
 
+.image-edit-modal-card {
+  width: min(720px, calc(100vw - 24px));
+}
+
+.image-edit-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.image-edit-col {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .image-edit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .version-list {
   margin-top: 8px;
   border: 1px solid var(--line);
