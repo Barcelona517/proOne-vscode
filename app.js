@@ -1808,7 +1808,7 @@ function pulseActionButton(node) {
   node.classList.add("btn-pressed-feedback");
   window.setTimeout(() => {
     node.classList.remove("btn-pressed-feedback");
-  }, 180);
+  }, 320);
 }
 
 function ensureTemplateOrder() {
