@@ -1762,10 +1762,14 @@ function pushDrawUndoSnapshotWithAnnoRect(imageId, annoId, rectBefore) {
 function undoLastDrawAction() {
   if (!ensureCanEdit("撤销上一步")) return;
   const snapshot = state.drawUndoStack.pop();
-  if (!snapshot) return;
+  if (!snapshot) {
+    showDrawActionHint("暂无可撤销操作");
+    return;
+  }
   const img = state.images.find((item) => item.id === snapshot.imageId);
   if (!img) {
     renderAll();
+    showDrawActionHint("撤销失败：未找到对应图片");
     return;
   }
 
@@ -1779,6 +1783,32 @@ function undoLastDrawAction() {
   state.selectedAnnoId = selectedId && img.annotations.some((anno) => anno.id === selectedId) ? selectedId : null;
   renderAll();
   saveState();
+  showDrawActionHint("已撤销上一步");
+}
+
+let drawActionHintTimer = null;
+
+function showDrawActionHint(message) {
+  if (!el.drawState) return;
+  if (drawActionHintTimer) {
+    window.clearTimeout(drawActionHintTimer);
+    drawActionHintTimer = null;
+  }
+  el.drawState.textContent = String(message || "");
+  drawActionHintTimer = window.setTimeout(() => {
+    drawActionHintTimer = null;
+    renderEditMode();
+  }, 1100);
+}
+
+function pulseActionButton(node) {
+  if (!node) return;
+  node.classList.remove("btn-pressed-feedback");
+  void node.offsetWidth;
+  node.classList.add("btn-pressed-feedback");
+  window.setTimeout(() => {
+    node.classList.remove("btn-pressed-feedback");
+  }, 180);
 }
 
 function ensureTemplateOrder() {
@@ -6328,6 +6358,7 @@ function bindEvents() {
 
   el.startDrawBtn.addEventListener("click", () => {
     if (!ensureCanEdit("新增方框")) return;
+    pulseActionButton(el.startDrawBtn);
     if (!state.activeDraftTagId || !findTemplateTag(state.activeDraftTagId)) {
       const fallbackTag = getTemplateTagsFromDepth(3)[0] || state.templateTags[0] || null;
       if (fallbackTag) {
@@ -6351,6 +6382,7 @@ function bindEvents() {
     state.drawingActive = !state.drawingActive;
     state.draftRect = null;
     renderAll();
+    showDrawActionHint(state.drawingActive ? "已开启添加，拖拽即可画框" : "已取消添加");
   });
 
   if (el.glyphStartCreateBtn) {
@@ -6522,7 +6554,12 @@ function bindEvents() {
 
   el.clearDraftBtn.addEventListener("click", () => {
     if (!ensureCanEdit("清空草稿")) return;
+    pulseActionButton(el.clearDraftBtn);
     const hasDraftState = Boolean(state.draftRect) || state.pendingDrafts.length > 0 || state.drawingActive;
+    if (!hasDraftState) {
+      showDrawActionHint("当前没有可清空的草稿");
+      return;
+    }
     if (hasDraftState) {
       const img = selectedImage();
       pushDrawUndoSnapshot(img?.id || state.selectedImageId);
@@ -6533,10 +6570,12 @@ function bindEvents() {
     state.glyphCreateActive = false;
     if (el.annoTranscription) el.annoTranscription.value = "";
     renderAll();
+    showDrawActionHint("已清空草稿");
   });
 
   if (el.drawUndoBtn) {
     el.drawUndoBtn.addEventListener("click", () => {
+      pulseActionButton(el.drawUndoBtn);
       undoLastDrawAction();
     });
   }
