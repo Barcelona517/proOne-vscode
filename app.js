@@ -5749,6 +5749,7 @@ function bindDrawEvents() {
     }
 
     if (drawing && start && state.draftRect) {
+      const currentImg = selectedImage();
       if (state.glyphCreateActive) {
         if (state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
           try {
@@ -5763,7 +5764,9 @@ function bindDrawEvents() {
       } else {
         const tag = findTemplateTag(state.activeDraftTagId);
         if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
-          pushDrawUndoSnapshot(img.id);
+          if (currentImg) {
+            pushDrawUndoSnapshot(currentImg.id);
+          }
           const style = getTagStyle(tag) || {
             shape: "rect",
             color: el.annoColor.value,
