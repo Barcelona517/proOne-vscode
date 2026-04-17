@@ -2689,7 +2689,7 @@ async function autoDrawLayoutByAI() {
     .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
   const nonOverlapDrafts = [];
   sortedDrafts.forEach((draft) => {
-    const overlaps = nonOverlapDrafts.some((kept) => rectsOverlap(kept.rect, draft.rect));
+    const overlaps = nonOverlapDrafts.some((kept) => kept.tagId === draft.tagId && rectsOverlap(kept.rect, draft.rect));
     if (!overlaps) nonOverlapDrafts.push(draft);
   });
 

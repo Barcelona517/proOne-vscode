@@ -666,7 +666,7 @@ app.post("/api/layout/suggest", async (req, res) => {
       "2) x,y,w,h 为 0~1 的归一化坐标；",
       "3) 只返回明显区域，不要输出太碎的小块；",
       "4) 无法识别时返回 detections 空数组。",
-      "5) 严禁框与框重合（任意两框交叠面积必须为 0），宁可少报也不要重合。"
+      "5) 同一标签的框严禁重合（同一 tagName 的任意两框交叠面积必须为 0）；不同标签允许重合。"
     ];
 
     if (xmlHintLines.length > 0) {
@@ -681,7 +681,7 @@ app.post("/api/layout/suggest", async (req, res) => {
       promptLines.push(
         "以下是用户上传文档中的勾画规则，请记住并严格执行：",
         xmlHintRules,
-        "请持续遵守这些规则，尤其是禁止重合。"
+        "请持续遵守这些规则，尤其要保证同一标签的框不重合。"
       );
     }
 
@@ -753,7 +753,12 @@ app.post("/api/layout/suggest", async (req, res) => {
       .slice()
       .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
       .forEach((item) => {
-        const hasOverlap = nonOverlapDetections.some((picked) => overlapArea(picked, item) > 0.000001);
+        const itemTag = String(item.tagName || "").toLowerCase();
+        const hasOverlap = nonOverlapDetections.some((picked) => {
+          const pickedTag = String(picked.tagName || "").toLowerCase();
+          if (pickedTag !== itemTag) return false;
+          return overlapArea(picked, item) > 0.000001;
+        });
         if (!hasOverlap) {
           nonOverlapDetections.push(item);
         }
