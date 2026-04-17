@@ -1739,13 +1739,15 @@ function buildDrawUndoSnapshot(imageId = state.selectedImageId) {
     pendingDrafts: deepClone(Array.isArray(state.pendingDrafts) ? state.pendingDrafts : []),
     draftRect: state.draftRect ? { ...state.draftRect } : null,
     drawingActive: Boolean(state.drawingActive),
-    selectedAnnoId: String(state.selectedAnnoId || "")
+    selectedAnnoId: String(state.selectedAnnoId || ""),
+    undoKind: "generic"
   };
 }
 
-function pushDrawUndoSnapshot(imageId = state.selectedImageId, preparedSnapshot = null) {
+function pushDrawUndoSnapshot(imageId = state.selectedImageId, preparedSnapshot = null, undoKind = "generic") {
   const snapshot = preparedSnapshot || buildDrawUndoSnapshot(imageId);
   if (!snapshot) return;
+  snapshot.undoKind = String(snapshot.undoKind || undoKind || "generic");
   const last = state.drawUndoStack[state.drawUndoStack.length - 1] || null;
   const sameAsLast = last && JSON.stringify(last) === JSON.stringify(snapshot);
   if (sameAsLast) return;
@@ -1758,6 +1760,7 @@ function pushDrawUndoSnapshot(imageId = state.selectedImageId, preparedSnapshot 
 function pushDrawUndoSnapshotWithAnnoRect(imageId, annoId, rectBefore) {
   const snapshot = buildDrawUndoSnapshot(imageId);
   if (!snapshot) return;
+  snapshot.undoKind = "adjust-anno";
   snapshot.annotations = (snapshot.annotations || []).map((anno) => {
     if (anno.id !== annoId) return anno;
     return {
@@ -1793,6 +1796,18 @@ function undoLastDrawAction() {
   renderAll();
   saveState();
   showDrawActionHint("已撤销上一步");
+}
+
+function pruneTrailingDraftUndoSnapshots(imageId = state.selectedImageId) {
+  const targetId = String(imageId || "").trim();
+  if (!targetId) return;
+  while (state.drawUndoStack.length > 0) {
+    const top = state.drawUndoStack[state.drawUndoStack.length - 1];
+    if (!top || top.imageId !== targetId || top.undoKind !== "draft-add") {
+      break;
+    }
+    state.drawUndoStack.pop();
+  }
 }
 
 let drawActionHintTimer = null;
@@ -5896,7 +5911,7 @@ function bindDrawEvents() {
         const tag = findTemplateTag(state.activeDraftTagId);
         if (tag && state.draftRect.w >= 0.003 && state.draftRect.h >= 0.003) {
           if (currentImg) {
-            pushDrawUndoSnapshot(currentImg.id);
+            pushDrawUndoSnapshot(currentImg.id, null, "draft-add");
           }
           const style = getTagStyle(tag) || {
             shape: "rect",
@@ -6817,7 +6832,15 @@ function bindEvents() {
     const draftTranscription = textEnabled ? String(el.annoTranscription?.value || "").trim() : "";
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
-    pushDrawUndoSnapshot(img.id);
+    pruneTrailingDraftUndoSnapshots(img.id);
+    const saveSnapshot = buildDrawUndoSnapshot(img.id);
+    if (saveSnapshot) {
+      saveSnapshot.pendingDrafts = [];
+      saveSnapshot.draftRect = null;
+      saveSnapshot.drawingActive = false;
+      saveSnapshot.undoKind = "save-apply";
+      pushDrawUndoSnapshot(img.id, saveSnapshot, "save-apply");
+    }
 
     const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
       defaultTranscription: textEnabled ? draftTranscription : "",
