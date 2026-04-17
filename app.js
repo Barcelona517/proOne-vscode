@@ -1778,6 +1778,28 @@ function undoLastDrawAction() {
     showDrawActionHint("暂无可撤销操作");
     return;
   }
+
+  if (snapshot.undoKind === "remove-anno") {
+    const img = state.images.find((item) => item.id === snapshot.imageId);
+    if (!img) {
+      renderAll();
+      showDrawActionHint("撤销失败：未找到对应图片");
+      return;
+    }
+    state.selectedImageId = snapshot.imageId;
+    const removeAnnoId = String(snapshot.removeAnnoId || "").trim();
+    if (removeAnnoId) {
+      img.annotations = (img.annotations || []).filter((anno) => anno.id !== removeAnnoId);
+    }
+    state.glyphCreateActive = false;
+    const selectedId = String(snapshot.selectedAnnoId || "");
+    state.selectedAnnoId = selectedId && img.annotations.some((anno) => anno.id === selectedId) ? selectedId : null;
+    renderAll();
+    saveState();
+    showDrawActionHint("已撤销上一步");
+    return;
+  }
+
   const img = state.images.find((item) => item.id === snapshot.imageId);
   if (!img) {
     renderAll();
@@ -3608,18 +3630,16 @@ function appendDraftsWithStepUndo(img, drafts, options = {}) {
   let lastAnnoId = null;
 
   items.forEach((draftItem) => {
-    const stepSnapshot = buildDrawUndoSnapshot(img?.id);
-    if (stepSnapshot) {
-      stepSnapshot.pendingDrafts = [];
-      stepSnapshot.draftRect = null;
-      stepSnapshot.drawingActive = false;
-      stepSnapshot.undoKind = "save-apply";
-      pushDrawUndoSnapshot(img.id, stepSnapshot, "save-apply");
-    }
-
     const result = appendDraftsToAnnotations(img, [draftItem], options);
-    if (result?.lastAnnoId) {
-      lastAnnoId = result.lastAnnoId;
+    const createdAnnoId = String(result?.lastAnnoId || "").trim();
+    if (createdAnnoId) {
+      pushDrawUndoSnapshot(img.id, {
+        imageId: img.id,
+        undoKind: "remove-anno",
+        removeAnnoId: createdAnnoId,
+        selectedAnnoId: String(state.selectedAnnoId || "")
+      }, "remove-anno");
+      lastAnnoId = createdAnnoId;
     }
   });
 
