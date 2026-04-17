@@ -1761,6 +1761,11 @@ function buildAiLayoutHintPromptLines(hints) {
   const examples = Array.isArray(hints?.examples) ? hints.examples : [];
   const enabledExamples = examples.filter((item) => item.enabled);
   enabledExamples.forEach((item, idx) => {
+    const ruleText = String(item.ruleText || "").trim();
+    if (ruleText) {
+      lines.push(`${idx + 1}. 文件=${item.fileName}; 规则摘要=${ruleText.slice(0, 500)}`);
+      return;
+    }
     const summaryText = String(item.summaryText || "").trim();
     if (summaryText) {
       lines.push(`${idx + 1}. 文件=${item.fileName}; 说明摘要=${summaryText.slice(0, 500)}`);
@@ -1787,9 +1792,10 @@ function normalizeAiLayoutHints(raw) {
       tags: Array.isArray(item?.tags) ? item.tags.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 24) : [],
       paths: Array.isArray(item?.paths) ? item.paths.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 24) : [],
       summaryText: String(item?.summaryText || "").trim().slice(0, 2000),
+      ruleText: String(item?.ruleText || "").trim().slice(0, 8000),
       enabled: activeSet.size === 0 ? true : activeSet.has(String(item?.fileName || "").trim())
     }))
-    .filter((item) => item.fileName && (item.tags.length > 0 || item.paths.length > 0 || item.summaryText))
+    .filter((item) => item.fileName && (item.tags.length > 0 || item.paths.length > 0 || item.summaryText || item.ruleText))
     .slice(-10);
   const activeFileNames = examples.filter((item) => item.enabled).map((item) => item.fileName);
   const cachedPromptLines = buildAiLayoutHintPromptLines({ examples });
@@ -1839,6 +1845,7 @@ async function extractHintFromFile(file) {
       tags: [],
       paths: [],
       summaryText: plainText.slice(0, 1600),
+      ruleText: plainText.slice(0, 8000),
       enabled: true
     };
   }
@@ -1859,6 +1866,7 @@ async function extractHintFromFile(file) {
       ...xmlHint,
       fileType: "xml",
       summaryText,
+      ruleText: String(text || "").slice(0, 8000),
       templateTags
     };
   }
@@ -1882,6 +1890,7 @@ async function extractHintFromFile(file) {
     tags: [],
     paths: [],
     summaryText: short,
+    ruleText: plainText.slice(0, 8000),
     enabled: true
   };
 }
@@ -2039,6 +2048,21 @@ function buildXmlHintLinesForPrompt() {
   const hints = normalizeAiLayoutHints(state.aiLayoutHints);
   state.aiLayoutHints = hints;
   return Array.isArray(hints.cachedPromptLines) ? hints.cachedPromptLines.slice(0, 12) : [];
+}
+
+function buildXmlHintRulesForPrompt() {
+  const hints = normalizeAiLayoutHints(state.aiLayoutHints);
+  state.aiLayoutHints = hints;
+  const enabledExamples = Array.isArray(hints.examples)
+    ? hints.examples.filter((item) => item.enabled)
+    : [];
+  const chunks = [];
+  enabledExamples.forEach((item, idx) => {
+    const ruleText = String(item.ruleText || item.summaryText || "").trim();
+    if (!ruleText) return;
+    chunks.push(`文件${idx + 1}: ${item.fileName}\n${ruleText.slice(0, 2400)}`);
+  });
+  return chunks.join("\n\n").slice(0, 12000);
 }
 
 function renderXmlHintInfo() {
@@ -2598,7 +2622,8 @@ async function autoDrawLayoutByAI() {
   const payload = {
     imageDataUrl,
     categories: targetTags.map((tag) => ({ name: tag.name, path: tag.path })),
-    xmlHintLines: buildXmlHintLinesForPrompt()
+    xmlHintLines: buildXmlHintLinesForPrompt(),
+    xmlHintRules: buildXmlHintRulesForPrompt()
   };
 
   const res = await fetch(`${API_BASE}/api/layout/suggest`, {
@@ -2644,7 +2669,8 @@ async function autoDrawLayoutByAI() {
       borderStyle: normalizeAnnoBorderStyle(matched.style.borderStyle || "solid"),
       borderWidth: normalizeAnnoBorderWidth(matched.style.borderWidth || 2),
       transcription: String(item?.transcription || item?.text || "").trim(),
-      meaning: String(item?.meaning || "").trim()
+      meaning: String(item?.meaning || "").trim(),
+      confidence: Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : 0
     });
   });
 
@@ -2652,12 +2678,21 @@ async function autoDrawLayoutByAI() {
     throw new Error("识别结果与当前第3层及以下标签不匹配");
   }
 
-  const overlapCheck = validatePendingDraftsNoSameTagOverlap(img, drafts);
+  const sortedDrafts = drafts
+    .slice()
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+  const nonOverlapDrafts = [];
+  sortedDrafts.forEach((draft) => {
+    const overlaps = nonOverlapDrafts.some((kept) => rectsOverlap(kept.rect, draft.rect));
+    if (!overlaps) nonOverlapDrafts.push(draft);
+  });
+
+  const overlapCheck = validatePendingDraftsNoSameTagOverlap(img, nonOverlapDrafts);
   if (!overlapCheck.ok) {
     throw new Error(`自动画框失败：${overlapCheck.message}`);
   }
 
-  const { lastAnnoId } = appendDraftsToAnnotations(img, drafts, { preferDraftText: true });
+  const { lastAnnoId } = appendDraftsToAnnotations(img, nonOverlapDrafts, { preferDraftText: true });
   state.selectedAnnoId = lastAnnoId;
   state.drawingActive = false;
   state.glyphCreateActive = false;
@@ -4622,44 +4657,47 @@ function renderMainImage() {
   if (el.mainImage.src !== img.src) {
     el.mainImage.src = img.src;
   }
-  if (state.renamingImage) {
-    if (el.viewerTitle) el.viewerTitle.classList.add("hidden");
-    if (el.viewerTitleInput) {
-      el.viewerTitleInput.classList.remove("hidden");
-      if (document.activeElement !== el.viewerTitleInput) {
-        el.viewerTitleInput.value = img.name || "";
-      }
-    }
-    if (el.renameImageBtn) {
-      el.renameImageBtn.disabled = false;
-      el.renameImageBtn.textContent = "保存";
-    }
-  } else {
-    el.viewerTitle.textContent = `${img.name} | id:${img.meta.id}`;
-    if (el.viewerTitle) el.viewerTitle.classList.remove("hidden");
-    if (el.viewerTitleInput) el.viewerTitleInput.classList.add("hidden");
-    if (el.renameImageBtn) {
-      el.renameImageBtn.disabled = false;
-      el.renameImageBtn.textContent = "重命名";
-    }
+  el.viewerTitle.textContent = `${img.name} | id:${img.meta.id}`;
+  if (el.viewerTitle) el.viewerTitle.classList.remove("hidden");
+  if (el.viewerTitleInput) el.viewerTitleInput.classList.add("hidden");
+  if (el.renameImageBtn) {
+    el.renameImageBtn.disabled = false;
+    el.renameImageBtn.textContent = "编辑";
   }
   syncDrawLayerSize();
 }
 
 function startRenameSelectedImage() {
-  if (!ensureCanEdit("重命名图片")) return;
+  if (!ensureCanEdit("编辑图片信息")) return;
   const img = selectedImage();
   if (!img) {
     alert("请先选择图片");
     return;
   }
 
-  state.renamingImage = true;
-  renderMainImage();
-  if (el.viewerTitleInput) {
-    el.viewerTitleInput.focus();
-    el.viewerTitleInput.select();
+  const nextNameInput = window.prompt("请输入图片名称", String(img.name || ""));
+  if (nextNameInput == null) return;
+  const nextName = String(nextNameInput || "").trim();
+  if (!nextName) {
+    alert("图片名称不能为空");
+    return;
   }
+
+  const currentId = String(img.meta?.id || "").trim();
+  const nextIdInput = window.prompt("请输入图片ID", currentId);
+  if (nextIdInput == null) return;
+  const nextId = String(nextIdInput || "").trim();
+  if (!nextId) {
+    alert("图片ID不能为空");
+    return;
+  }
+
+  img.name = nextName;
+  img.meta = img.meta || {};
+  img.meta.id = nextId;
+  state.renamingImage = false;
+  renderAll();
+  saveState();
 }
 
 function confirmRenameSelectedImage() {
@@ -5938,11 +5976,7 @@ function bindEvents() {
 
   if (el.renameImageBtn) {
     el.renameImageBtn.addEventListener("click", () => {
-      if (state.renamingImage) {
-        confirmRenameSelectedImage();
-      } else {
-        startRenameSelectedImage();
-      }
+      startRenameSelectedImage();
     });
   }
 

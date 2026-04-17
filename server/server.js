@@ -620,6 +620,7 @@ app.post("/api/layout/suggest", async (req, res) => {
     const imageDataUrl = String(req.body?.imageDataUrl || "");
     const categoriesRaw = Array.isArray(req.body?.categories) ? req.body.categories : [];
     const xmlHintLinesRaw = Array.isArray(req.body?.xmlHintLines) ? req.body.xmlHintLines : [];
+    const xmlHintRules = String(req.body?.xmlHintRules || "").trim().slice(0, 12000);
     const categories = categoriesRaw
       .map((item) => ({
         name: String(item?.name || "").trim(),
@@ -664,7 +665,8 @@ app.post("/api/layout/suggest", async (req, res) => {
       "1) tagName 必须是上面可用标签之一；",
       "2) x,y,w,h 为 0~1 的归一化坐标；",
       "3) 只返回明显区域，不要输出太碎的小块；",
-      "4) 无法识别时返回 detections 空数组。"
+      "4) 无法识别时返回 detections 空数组。",
+      "5) 严禁框与框重合（任意两框交叠面积必须为 0），宁可少报也不要重合。"
     ];
 
     if (xmlHintLines.length > 0) {
@@ -672,6 +674,14 @@ app.post("/api/layout/suggest", async (req, res) => {
         "以下是用户投喂的 XML 标签示例（代表其标注习惯），请优先按这些路径和标签名称做判断：",
         ...xmlHintLines,
         "若示例与图片冲突，以图片实际内容为准，但标签命名尽量贴合示例。"
+      );
+    }
+
+    if (xmlHintRules) {
+      promptLines.push(
+        "以下是用户上传文档中的勾画规则，请记住并严格执行：",
+        xmlHintRules,
+        "请持续遵守这些规则，尤其是禁止重合。"
       );
     }
 
@@ -728,11 +738,32 @@ app.post("/api/layout/suggest", async (req, res) => {
       .filter((item) => item.w >= 0.003 && item.h >= 0.003 && item.x + item.w <= 1 && item.y + item.h <= 1)
       .slice(0, 100);
 
-    if (hasSent && hasSnt && detections.length > 1) {
+    const overlapArea = (a, b) => {
+      const left = Math.max(a.x, b.x);
+      const top = Math.max(a.y, b.y);
+      const right = Math.min(a.x + a.w, b.x + b.w);
+      const bottom = Math.min(a.y + a.h, b.y + b.h);
+      const w = Math.max(0, right - left);
+      const h = Math.max(0, bottom - top);
+      return w * h;
+    };
+
+    const nonOverlapDetections = [];
+    detections
+      .slice()
+      .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
+      .forEach((item) => {
+        const hasOverlap = nonOverlapDetections.some((picked) => overlapArea(picked, item) > 0.000001);
+        if (!hasOverlap) {
+          nonOverlapDetections.push(item);
+        }
+      });
+
+    if (hasSent && hasSnt && nonOverlapDetections.length > 1) {
       const sentLike = new Set(["sent", "snt"]);
-      const sentenceDetections = detections.filter((d) => sentLike.has(String(d.tagName || "").toLowerCase()));
-      if (sentenceDetections.length === detections.length) {
-        const sorted = [...detections].sort((a, b) => {
+      const sentenceDetections = nonOverlapDetections.filter((d) => sentLike.has(String(d.tagName || "").toLowerCase()));
+      if (sentenceDetections.length === nonOverlapDetections.length) {
+        const sorted = [...nonOverlapDetections].sort((a, b) => {
           if (Math.abs(a.y - b.y) > 0.02) return a.y - b.y;
           return a.x - b.x;
         });
@@ -742,7 +773,7 @@ app.post("/api/layout/suggest", async (req, res) => {
       }
     }
 
-    res.json({ detections });
+    res.json({ detections: nonOverlapDetections });
   } catch (err) {
     const modelTip = `当前模型配置: ${doubaoModel}`;
     const detail = [
