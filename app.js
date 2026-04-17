@@ -4866,6 +4866,25 @@ function renderPropsEditor() {
   syncCharAnnoCodepointFromRegistry(anno);
   const templateTag = findTemplateTag(anno.tagId);
   const meaningEnabled = supportsMeaningAttrByTagId(anno.tagId);
+
+  const tagTypeRow = document.createElement("div");
+  tagTypeRow.className = "prop-row";
+  tagTypeRow.innerHTML = "<span>标签类型</span>";
+  const tagTypeSelect = document.createElement("select");
+  const appendTagTypeOption = (tag, depth) => {
+    const option = document.createElement("option");
+    option.value = tag.id;
+    option.textContent = `${"  ".repeat(depth)}${tag.name}`;
+    tagTypeSelect.appendChild(option);
+    templateChildren(tag.id).forEach((child) => appendTagTypeOption(child, depth + 1));
+  };
+  templateChildren(null).forEach((root) => appendTagTypeOption(root, 0));
+  if (anno.tagId && state.templateTags.some((tag) => tag.id === anno.tagId)) {
+    tagTypeSelect.value = anno.tagId;
+  }
+  tagTypeRow.appendChild(tagTypeSelect);
+  el.propsEditor.appendChild(tagTypeRow);
+
   setObjectTextFieldsVisible(meaningEnabled);
   el.propNote.disabled = !meaningEnabled;
   const attrs = templateTag?.attrs?.length ? templateTag.attrs : ["id"];
@@ -4920,6 +4939,7 @@ function renderPropsEditor() {
   el.propsEditor.appendChild(styleTypeRow);
 
   state.objectStyleInputs = {
+    tagId: tagTypeSelect,
     color: styleColorInput,
     borderWidth: styleWidthInput,
     borderStyle: styleTypeSelect
@@ -6267,7 +6287,7 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.drawingActive = false;
     state.glyphCreateActive = false;
-    el.annoTranscription.value = "";
+    if (el.annoTranscription) el.annoTranscription.value = "";
     renderAll();
   });
 
@@ -6324,7 +6344,7 @@ function bindEvents() {
     }
 
     const textEnabled = drawTextFieldsEnabled();
-    const draftTranscription = textEnabled ? el.annoTranscription.value.trim() : "";
+    const draftTranscription = textEnabled ? String(el.annoTranscription?.value || "").trim() : "";
     const draftMeaning = textEnabled ? String(el.annoMeaning?.value || "").trim() : "";
 
     const { lastAnnoId } = appendDraftsToAnnotations(img, state.pendingDrafts, {
@@ -6337,7 +6357,7 @@ function bindEvents() {
     state.pendingDrafts = [];
     state.draftRect = null;
     state.drawingActive = false;
-    el.annoTranscription.value = "";
+    if (el.annoTranscription) el.annoTranscription.value = "";
     if (el.annoMeaning) el.annoMeaning.value = "";
     renderAll();
     saveState();
@@ -6355,11 +6375,20 @@ function bindEvents() {
       return;
     }
 
+    const nextTagId = String(state.objectStyleInputs?.tagId?.value || anno.tagId || "");
+    if (nextTagId && nextTagId !== anno.tagId) {
+      anno.tagId = nextTagId;
+      const nextTag = findTemplateTag(nextTagId);
+      anno.tagName = nextTag?.name || anno.tagName;
+      anno.tagPath = templatePath(nextTagId) || anno.tagPath;
+    }
+
     const nextAttrs = {};
     Object.keys(state.propInputs).forEach((key) => {
       setIfNotEmpty(nextAttrs, key, state.propInputs[key].value);
     });
-    if (supportsMeaningAttrByTagId(anno.tagId)) {
+    const nextMeaningEnabled = supportsMeaningAttrByTagId(anno.tagId);
+    if (nextMeaningEnabled) {
       setIfNotEmpty(nextAttrs, "meaning", el.propMeaning?.value || "");
     }
     const prevAttrs = { ...(anno.attrs || {}) };
@@ -6367,7 +6396,7 @@ function bindEvents() {
     ["codepoint", "codepointMap", "codepointSourceMap", "glyphChar", "glyphIds", "glyphNote", "meaning", "transcriptionMeaning"].forEach((key) => {
       if (prevAttrs[key]) anno.attrs[key] = prevAttrs[key];
     });
-    if (supportsMeaningAttrByTagId(anno.tagId)) {
+    if (nextMeaningEnabled) {
       anno.transcription = el.propNote.value.trim();
     }
     if (state.objectStyleInputs) {
